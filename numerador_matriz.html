@@ -443,8 +443,8 @@ const DB_NAME = "numerador-matriz";
 const DB_STORE = "images";
 const DEFAULT_VISION_MODEL = "moondream";
 const VISION_TIMEOUT_MS = 135000;
-const DESC_PROMPT = "Descreva em uma frase curta, em português do Brasil, o conteúdo visível nesta imagem. Mencione o objeto, animal ou cena principal e algum detalhe relevante, se estiver claro. Se algo estiver ambíguo, use 'parece'. Responda apenas com a legenda.";
-const MOONDREAM_PROMPT = "What is the main object in this image?";
+const DESC_PROMPT = "Descreva o assunto principal em uma frase simples e curta, em português do Brasil. Diga o que é e a ação ou o lugar visível. Preserve cor, quantidade ou posição se ajudarem a identificar o assunto. Não liste objetos secundários nem invente detalhes. Se houver dúvida, use 'parece'. Responda apenas com a legenda, de preferência em até 12 palavras.";
+const MOONDREAM_PROMPT = "Describe the main subject and its visible action or location in one short sentence, preferably under 12 words. Keep clear identifying details such as color, count or pose. Do not list secondary objects or invent details.";
 
 /* Lê um JSON do localStorage; devolve null se faltar, estiver inválido ou o acesso falhar. */
 function readJson(key) {

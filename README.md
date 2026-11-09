@@ -36,6 +36,13 @@ endereço do servidor local.
    A aba **Células** abre e as legendas aparecem uma por vez. Com o
    Moondream, as legendas são geradas em inglês.
 
+As legendas pedem uma frase simples: assunto principal e ação ou lugar
+visível, como “uma flor no campo” ou “uma baleia debaixo d'água”. Detalhes
+como cor, quantidade e posição entram quando ajudam a identificar o assunto.
+As descrições já salvas continuam iguais. Para gerá-las de novo com esse
+pedido, clique em **Descrever células**; para a referência, use
+**Descrever imagem de referência** na aba **Cabeçalho**.
+
 Quando o executável `ollama` está disponível ao servidor, o Separador o
 inicia ao abrir uma aba e encerra o processo que iniciou após fechar a
 última aba. Se o Ollama já estiver em execução, o Separador usa essa
@@ -51,6 +58,13 @@ estiverem prontas, clique em **Sugerir respostas** em **Cabeçalho** ou
 **Células**. A grade mostra o resultado e o motivo por recorte.
 Revise as sugestões antes de clicar em **Marcar sugestões pendentes**.
 Recortes sem legenda aparecem como **Incerta**.
+
+A comparação usa os textos da pergunta, da referência e das legendas.
+Quando a pergunta menciona uma referência ausente, o resultado fica
+**Incerta**. Nas comparações gerais, o motivo informado pelo modelo aparece
+ao lado do resultado; respostas sem uma classificação clara ficam incertas.
+O modelo ainda pode confundir o habitat habitual com a posição na cena se
+a legenda estiver incompleta. Confira se ela informa a ação ou o lugar pedido.
 
 ## Uso e armazenamento
 
