@@ -2016,9 +2016,10 @@ async function compareCells(rec) {
     reason: getDescription(rec, cell) ? "Sem uma avaliação válida." : "Sem descrição da imagem."
   }]));
   try {
-    for (let offset = 0; offset < described.length; offset += 12) {
+    const batchSize = 3;
+    for (let offset = 0; offset < described.length; offset += batchSize) {
       if (!current()) return;
-      const batch = Object.fromEntries(described.slice(offset, offset + 12)
+      const batch = Object.fromEntries(described.slice(offset, offset + batchSize)
         .map(([n, caption]) => [n, caption.slice(0, 1200)]));
       const response = await fetch("/api/banner/compare", {
         method: "POST", headers: { "Content-Type": "application/json" },
