@@ -444,45 +444,44 @@ const DB_STORE = "images";
 const DEFAULT_VISION_MODEL = "moondream";
 const VISION_TIMEOUT_MS = 135000;
 const DESC_PROMPT = "Descreva em uma frase curta, em português do Brasil, o conteúdo visível nesta imagem. Mencione o objeto, animal ou cena principal e algum detalhe relevante, se estiver claro. Se algo estiver ambíguo, use 'parece'. Responda apenas com a legenda.";
-const MOONDREAM_PROMPT = "What is in this image?";
+const MOONDREAM_PROMPT = "What is the main object in this image?";
 
-let marks = {};
-try { marks = JSON.parse(localStorage.getItem(MARKS_KEY) || "{}") || {}; } catch (e) { marks = {}; }
+/* Lê um JSON do localStorage; devolve null se faltar, estiver inválido ou o acesso falhar. */
+function readJson(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "{}"); } catch (e) { return null; }
+}
+/* Grava um JSON no localStorage; se falhar, avisa com failMessage (quando houver). */
+function writeJson(key, value, failMessage) {
+  try { localStorage.setItem(key, JSON.stringify(value)); }
+  catch (e) { if (failMessage) toast(failMessage); }
+}
+
+let marks = readJson(MARKS_KEY) || {};
 
 let descriptions = {};
-try {
-  const savedDescriptions = JSON.parse(localStorage.getItem(DESC_KEY) || "{}");
-  if (savedDescriptions && typeof savedDescriptions === "object" && !Array.isArray(savedDescriptions)) {
-    descriptions = savedDescriptions;
-  }
-} catch (e) { descriptions = {}; }
+const savedDescriptions = readJson(DESC_KEY);
+if (savedDescriptions && typeof savedDescriptions === "object" && !Array.isArray(savedDescriptions)) {
+  descriptions = savedDescriptions;
+}
 
 function loadSettings() {
-  const def = { whiteThr: 244, gapMin: 5, visionModel: DEFAULT_VISION_MODEL };
-  try {
-    const loaded = { ...def, ...(JSON.parse(localStorage.getItem(SET_KEY) || "{}") || {}) };
-    if (typeof loaded.visionModel !== "string" || !loaded.visionModel.trim()) {
-      loaded.visionModel = DEFAULT_VISION_MODEL;
-    }
-    loaded.visionModel = loaded.visionModel.trim().slice(0, 80);
-    return loaded;
-  } catch (e) { return def; }
+  const loaded = {
+    whiteThr: 244, gapMin: 5, visionModel: DEFAULT_VISION_MODEL,
+    ...(readJson(SET_KEY) || {})
+  };
+  if (typeof loaded.visionModel !== "string" || !loaded.visionModel.trim()) {
+    loaded.visionModel = DEFAULT_VISION_MODEL;
+  }
+  loaded.visionModel = loaded.visionModel.trim().slice(0, 80);
+  return loaded;
 }
-function saveSettings() {
-  try { localStorage.setItem(SET_KEY, JSON.stringify(state.settings)); } catch (e) {}
-}
-function saveMarks() {
-  try { localStorage.setItem(MARKS_KEY, JSON.stringify(marks)); }
-  catch (e) { toast("Não foi possível salvar as marcações neste navegador."); }
-}
+function saveSettings() { writeJson(SET_KEY, state.settings); }
+function saveMarks() { writeJson(MARKS_KEY, marks, "Não foi possível salvar as marcações neste navegador."); }
 function keyOf(id, n) { return id + "::" + n; }
 function getMark(id, n) { return marks[keyOf(id, n)] || { status: "pendente", nota: "" }; }
 function setMark(id, n, patch) { marks[keyOf(id, n)] = { ...getMark(id, n), ...patch }; saveMarks(); }
 
-function saveDescriptions() {
-  try { localStorage.setItem(DESC_KEY, JSON.stringify(descriptions)); }
-  catch (e) { toast("Não foi possível salvar as descrições neste navegador."); }
-}
+function saveDescriptions() { writeJson(DESC_KEY, descriptions, "Não foi possível salvar as descrições neste navegador."); }
 function cellGeometry(rec, cell) {
   return `${rec.img.naturalWidth}x${rec.img.naturalHeight}|${cell.x},${cell.y},${cell.w},${cell.h}`;
 }
@@ -806,10 +805,8 @@ function findBanner(data, width, grid, left, right) {
   return { x0, x1, y0, y1, bg, image };
 }
 
-function analyze(img, opt) {
-  const W = img.naturalWidth, H = img.naturalHeight;
-  if (!W || !H) return { error: "Imagem sem dimensões válidas." };
-
+/* Reduz a imagem (máx. 1600 px) e devolve os pixels e o mapa em tons de cinza. */
+function sampleImage(img, W, H) {
   const scale = Math.min(1, 1600 / Math.max(W, H));
   const aw = Math.max(8, Math.round(W * scale));
   const ah = Math.max(8, Math.round(H * scale));
@@ -828,7 +825,11 @@ function analyze(img, opt) {
   for (let i = 0, p = 0; i < data.length; i += 4, p++) {
     gray[p] = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
   }
+  return { data, gray, aw, ah, scale };
+}
 
+/* Tenta a grade com vários parâmetros e devolve a melhor (ou null). */
+function detectBestGrid(gray, aw, ah, opt, scale) {
   const gap = Math.max(1, Math.round(opt.gapMin * scale));
   // Com o ajuste padrão, também procura divisórias de um pixel.
   const thinGap = opt.gapMin === 5 ? 1 : gap;
@@ -843,6 +844,18 @@ function analyze(img, opt) {
     // Na dúvida, mantém o resultado com os parâmetros mais estritos.
     if (candidate && (!grid || candidate.score > grid.score + 0.05)) grid = candidate;
   }
+  return grid;
+}
+
+function analyze(img, opt) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  if (!W || !H) return { error: "Imagem sem dimensões válidas." };
+
+  const sample = sampleImage(img, W, H);
+  if (sample.error) return sample;
+  const { data, gray, aw, ah, scale } = sample;
+
+  const grid = detectBestGrid(gray, aw, ah, opt, scale);
   if (!grid) return { error: "Não encontrei uma grade consistente nesta imagem." };
 
   const { rows: gridRows } = grid;
@@ -1621,6 +1634,16 @@ function descriptionToolbar(rec) {
   return bar;
 }
 
+/* fetch + JSON. Se o pedido foi abortado, repropaga o erro; senão, JSON inválido vira data = null. */
+async function fetchJson(url, options, ctrl) {
+  const res = await fetch(url, { ...options, signal: ctrl.signal });
+  const data = await res.json().catch(error => {
+    if (ctrl.signal.aborted) throw error;
+    return null;
+  });
+  return { res, data };
+}
+
 async function checkVisionService(model, signal) {
   if (location.protocol === "file:") {
     return {
@@ -1634,13 +1657,9 @@ async function checkVisionService(model, signal) {
   const timer = setTimeout(abort, 8000);
   let data;
   try {
-    const res = await fetch("/api/ollama/status?model=" + encodeURIComponent(model), {
-      cache: "no-store", signal: ctrl.signal
-    });
-    data = await res.json().catch(error => {
-      if (ctrl.signal.aborted) throw error;
-      return null;
-    });
+    ({ data } = await fetchJson("/api/ollama/status?model=" + encodeURIComponent(model), {
+      cache: "no-store"
+    }, ctrl));
   } catch (e) {
     return {
       ok: false, code: "sem_servidor",
@@ -1686,16 +1705,11 @@ async function requestCaption(rec, cell, job) {
   let res, data;
   try {
     const prompt = /^(?:library\/)?moondream(?::|$)/i.test(job.model) ? MOONDREAM_PROMPT : DESC_PROMPT;
-    res = await fetch("/api/ollama/describe", {
+    ({ res, data } = await fetchJson("/api/ollama/describe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: job.model, prompt, image }),
-      signal: ctrl.signal
-    });
-    data = await res.json().catch(error => {
-      if (ctrl.signal.aborted) throw error;
-      return null;
-    });
+      body: JSON.stringify({ model: job.model, prompt, image })
+    }, ctrl));
   } catch (e) {
     if (job.cancelled) throw descError("cancelado", "Cancelado.");
     if (timedOut) {
@@ -1755,8 +1769,8 @@ async function describeOne(rec, cell, job) {
   }
 }
 
-async function describeCells(rec, cells) {
-  if (activeComparison) {
+async function describeCells(rec, cells, forComparison = false) {
+  if (activeComparison && !forComparison) {
     toast("Aguarde a comparação das respostas terminar.");
     return;
   }
@@ -1993,29 +2007,43 @@ async function compareCells(rec) {
     toast("Aguarde o lote de descrições terminar.");
     return;
   }
-  const { banner, cells } = rec.res;
-  const question = banner && getDescription(rec, banner)?.texto;
-  const reference = banner?.image && getDescription(rec, banner.image)?.texto;
-  if (!question || (banner.image && !reference)) {
-    toast("Leia a pergunta e descreva a imagem de referência na aba Cabeçalho antes de comparar.");
-    return;
-  }
-  const described = cells.map(cell => [cell.n, getDescription(rec, cell)?.texto]).filter(([, caption]) => caption);
-  if (!described.length) {
-    toast("Gere as descrições das células antes de comparar.");
-    return;
-  }
-
+  const source = rec.res;
+  const { banner, cells } = source;
   const comparison = { running: true, message: "Comparando as descrições com a pergunta…" };
   activeComparison = true;
   rec.comparison = comparison;
   refreshComparison(rec);
-  const current = () => state.images.get(rec.id) === rec && rec.comparison === comparison;
+  const current = () => state.images.get(rec.id) === rec && rec.res === source && rec.comparison === comparison;
   const suggestions = Object.fromEntries(cells.map(cell => [cell.n, {
     status: "uncertain",
     reason: getDescription(rec, cell) ? "Sem uma avaliação válida." : "Sem descrição da imagem."
   }]));
   try {
+    if (!banner) throw new Error("Nenhum cabeçalho detectado. Confira o recorte da imagem.");
+    if (!getDescription(rec, banner)?.texto) {
+      comparison.message = "Lendo a pergunta do cabeçalho…";
+      refreshComparison(rec);
+      await readBanner(rec);
+      if (!current()) return;
+      if (!getDescription(rec, banner)?.texto) {
+        throw new Error(rec.bannerOCR?.message || "Não foi possível ler a pergunta do cabeçalho.");
+      }
+    }
+    const missing = [banner.image, ...cells].filter(cell => cell && !getDescription(rec, cell)?.texto);
+    if (missing.length) {
+      comparison.message = `Descrevendo ${missing.length} recorte(s) antes de comparar…`;
+      refreshComparison(rec);
+      await describeCells(rec, missing, true);
+      if (!current()) return;
+      if (missing.some(cell => !getDescription(rec, cell)?.texto)) {
+        throw new Error(descNotices.get(rec.id)?.message || "Preparação interrompida: faltam descrições. Tente novamente.");
+      }
+    }
+    const question = getDescription(rec, banner).texto;
+    const reference = banner.image && getDescription(rec, banner.image)?.texto;
+    const described = cells.map(cell => [cell.n, getDescription(rec, cell)?.texto]).filter(([, caption]) => caption);
+    comparison.message = "Comparando as descrições com a pergunta…";
+    refreshComparison(rec);
     const batchSize = 3;
     for (let offset = 0; offset < described.length; offset += batchSize) {
       if (!current()) return;
@@ -2120,13 +2148,7 @@ function cellCard(rec, cell) {
 }
 
 /* ----------------------------- MARCAÇÕES -------------------------- */
-function marksPanel(rec) {
-  const panel = el("div", "panel-marks");
-  if (!rec.res || !rec.res.cells || !rec.res.cells.length) {
-    panel.appendChild(errorBox(rec));
-    return panel;
-  }
-
+function marksFilterBar(rec, onChange) {
   const filters = el("div", "filters");
   const defs = [["todas", "Todas"], ["pendente", "Pendentes"], ["marcada", "Marcadas"], ["descartada", "Descartadas"]];
   const chips = {};
@@ -2139,7 +2161,7 @@ function marksPanel(rec) {
     chip.addEventListener("click", () => {
       state.filter = val;
       Object.entries(chips).forEach(([k, b]) => b.classList.toggle("active", k === val));
-      renderRows();
+      onChange();
     });
     chips[val] = chip;
     filters.appendChild(chip);
@@ -2149,88 +2171,104 @@ function marksPanel(rec) {
   search.className = "search";
   search.placeholder = "Buscar número, local ou observação…";
   search.value = state.search;
-  search.addEventListener("input", () => { state.search = search.value; renderRows(); });
+  search.addEventListener("input", () => { state.search = search.value; onChange(); });
   filters.appendChild(search);
-  panel.appendChild(filters);
+  return filters;
+}
+
+function marksVisibleCells(rec) {
+  const q = state.search.trim().toLowerCase();
+  return rec.res.cells.filter(cell => {
+    const m = getMark(rec.id, cell.n);
+    if (state.filter !== "todas" && (m.status || "pendente") !== state.filter) return false;
+    if (q) {
+      const hay = `${cell.n} l${cell.linha} c${cell.coluna} ${cell.linha} ${cell.coluna} ${m.status || "pendente"} ${m.nota || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function marksRow(rec, cell) {
+  const m = getMark(rec.id, cell.n);
+  const tr = document.createElement("tr");
+  tr.dataset.id = rec.id;
+  tr.dataset.n = String(cell.n);
+  if (state.selected && state.selected.id === rec.id && state.selected.n === cell.n) tr.classList.add("selected");
+
+  const tdN = el("td", "n", String(cell.n));
+  const tdLoc = el("td", "loc", `L${cell.linha} · C${cell.coluna}`);
+
+  const tdSt = el("td", "st");
+  const sel = document.createElement("select");
+  [["pendente", "Pendente"], ["marcada", "Marcada"], ["descartada", "Descartada"]].forEach(([v, t]) => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = t;
+    sel.appendChild(o);
+  });
+  sel.value = m.status;
+  sel.addEventListener("change", () => {
+    setMark(rec.id, cell.n, { status: sel.value });
+    syncStatusEverywhere(rec.id, cell.n);
+    refreshCounts();
+  });
+  tdSt.appendChild(sel);
+
+  const tdNt = el("td", "nt");
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.maxLength = 300;
+  inp.placeholder = "—";
+  inp.value = m.nota || "";
+  inp.addEventListener("input", () => setMark(rec.id, cell.n, { nota: inp.value }));
+  tdNt.appendChild(inp);
+
+  tr.append(tdN, tdLoc, tdSt, tdNt);
+  tr.addEventListener("click", e => {
+    if (e.target.closest("select, input, button")) return;
+    openDrawer(rec.id, cell.n);
+  });
+  return tr;
+}
+
+function renderMarksRows(rec, tbody) {
+  tbody.innerHTML = "";
+  const cells = marksVisibleCells(rec);
+  if (!cells.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 4;
+    td.className = "tiny";
+    td.style.padding = "18px";
+    td.style.textAlign = "center";
+    td.textContent = "Nenhuma célula com esse filtro.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const cell of cells) tbody.appendChild(marksRow(rec, cell));
+}
+
+function marksPanel(rec) {
+  const panel = el("div", "panel-marks");
+  if (!rec.res || !rec.res.cells || !rec.res.cells.length) {
+    panel.appendChild(errorBox(rec));
+    return panel;
+  }
+
+  const tbody = document.createElement("tbody");
+  const renderRows = () => renderMarksRows(rec, tbody);
+  panel.appendChild(marksFilterBar(rec, renderRows));
 
   const wrap = el("div", "table-wrap");
   const table = document.createElement("table");
   table.innerHTML = `<thead><tr>
       <th>#</th><th>Local</th><th>Status</th><th>Observação</th>
     </tr></thead>`;
-  const tbody = document.createElement("tbody");
   table.appendChild(tbody);
   wrap.appendChild(table);
   panel.appendChild(wrap);
 
-  function renderRows() {
-    tbody.innerHTML = "";
-    const q = state.search.trim().toLowerCase();
-    const cells = rec.res.cells.filter(cell => {
-      const m = getMark(rec.id, cell.n);
-      if (state.filter !== "todas" && (m.status || "pendente") !== state.filter) return false;
-      if (q) {
-        const hay = `${cell.n} l${cell.linha} c${cell.coluna} ${cell.linha} ${cell.coluna} ${m.status || "pendente"} ${m.nota || ""}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
-
-    if (!cells.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 4;
-      td.className = "tiny";
-      td.style.padding = "18px";
-      td.style.textAlign = "center";
-      td.textContent = "Nenhuma célula com esse filtro.";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-      return;
-    }
-
-    for (const cell of cells) {
-      const m = getMark(rec.id, cell.n);
-      const tr = document.createElement("tr");
-      tr.dataset.id = rec.id;
-      tr.dataset.n = String(cell.n);
-      if (state.selected && state.selected.id === rec.id && state.selected.n === cell.n) tr.classList.add("selected");
-
-      const tdN = el("td", "n", String(cell.n));
-      const tdLoc = el("td", "loc", `L${cell.linha} · C${cell.coluna}`);
-
-      const tdSt = el("td", "st");
-      const sel = document.createElement("select");
-      [["pendente", "Pendente"], ["marcada", "Marcada"], ["descartada", "Descartada"]].forEach(([v, t]) => {
-        const o = document.createElement("option");
-        o.value = v; o.textContent = t;
-        sel.appendChild(o);
-      });
-      sel.value = m.status;
-      sel.addEventListener("change", () => {
-        setMark(rec.id, cell.n, { status: sel.value });
-        syncStatusEverywhere(rec.id, cell.n);
-        refreshCounts();
-      });
-      tdSt.appendChild(sel);
-
-      const tdNt = el("td", "nt");
-      const inp = document.createElement("input");
-      inp.type = "text";
-      inp.maxLength = 300;
-      inp.placeholder = "—";
-      inp.value = m.nota || "";
-      inp.addEventListener("input", () => setMark(rec.id, cell.n, { nota: inp.value }));
-      tdNt.appendChild(inp);
-
-      tr.append(tdN, tdLoc, tdSt, tdNt);
-      tr.addEventListener("click", e => {
-        if (e.target.closest("select, input, button")) return;
-        openDrawer(rec.id, cell.n);
-      });
-      tbody.appendChild(tr);
-    }
-  }
   state.ui.renderMarksRows = renderRows;
   renderRows();
   return panel;
@@ -2593,97 +2631,104 @@ function closeSettings() { $("#settingsModal").classList.remove("open"); }
 /* ================================================================== */
 /* Eventos                                                            */
 /* ================================================================== */
-const fileInput = $("#fileInput");
+function bindEvents() {
+  const fileInput = $("#fileInput");
 
-$("#addBtn").addEventListener("click", () => fileInput.click());
-$("#settingsBtn").addEventListener("click", openSettings);
-$("#settingsClose").addEventListener("click", closeSettings);
-$("#settingsDone").addEventListener("click", closeSettings);
-$("#settingsModal").addEventListener("click", e => {
-  if (e.target === $("#settingsModal")) closeSettings();
-});
-fileInput.addEventListener("change", () => {
-  addFiles(fileInput.files);
-  fileInput.value = "";
-});
+  $("#addBtn").addEventListener("click", () => fileInput.click());
+  $("#settingsBtn").addEventListener("click", openSettings);
+  $("#settingsClose").addEventListener("click", closeSettings);
+  $("#settingsDone").addEventListener("click", closeSettings);
+  $("#settingsModal").addEventListener("click", e => {
+    if (e.target === $("#settingsModal")) closeSettings();
+  });
+  fileInput.addEventListener("change", () => {
+    addFiles(fileInput.files);
+    fileInput.value = "";
+  });
 
-$("#thr").addEventListener("input", e => {
-  state.settings.whiteThr = +e.target.value;
-  $("#thrVal").textContent = e.target.value;
-  saveSettings();
-});
-$("#gap").addEventListener("change", e => {
-  state.settings.gapMin = clamp(+e.target.value || 5, 2, 40);
-  e.target.value = state.settings.gapMin;
-  saveSettings();
-});
-$("#visionModel").addEventListener("change", e => {
-  state.settings.visionModel = (e.target.value || "").trim().slice(0, 80) || DEFAULT_VISION_MODEL;
-  e.target.value = state.settings.visionModel;
-  saveSettings();
-  updateDescToolbars();
-});
-$("#reprocessAll").addEventListener("click", () => { closeSettings(); reprocessAll(); });
-$("#exportAllCsv").addEventListener("click", exportAllCsv);
-$("#clearMarks").addEventListener("click", () => { closeSettings(); clearAllMarks(); });
-$("#csvBtn").addEventListener("click", exportAllCsv);
+  $("#thr").addEventListener("input", e => {
+    state.settings.whiteThr = +e.target.value;
+    $("#thrVal").textContent = e.target.value;
+    saveSettings();
+  });
+  $("#gap").addEventListener("change", e => {
+    state.settings.gapMin = clamp(+e.target.value || 5, 2, 40);
+    e.target.value = state.settings.gapMin;
+    saveSettings();
+  });
+  $("#visionModel").addEventListener("change", e => {
+    state.settings.visionModel = (e.target.value || "").trim().slice(0, 80) || DEFAULT_VISION_MODEL;
+    e.target.value = state.settings.visionModel;
+    saveSettings();
+    updateDescToolbars();
+  });
+  $("#reprocessAll").addEventListener("click", () => { closeSettings(); reprocessAll(); });
+  $("#exportAllCsv").addEventListener("click", exportAllCsv);
+  $("#clearMarks").addEventListener("click", () => { closeSettings(); clearAllMarks(); });
+  $("#csvBtn").addEventListener("click", exportAllCsv);
 
-// arrastar e soltar em qualquer lugar
-let dragDepth = 0;
-const overlay = $("#dropOverlay");
-window.addEventListener("dragenter", e => {
-  if (!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
-  dragDepth++;
-  overlay.classList.add("show");
-});
-window.addEventListener("dragleave", () => {
-  dragDepth = Math.max(0, dragDepth - 1);
-  if (!dragDepth) overlay.classList.remove("show");
-});
-window.addEventListener("dragover", e => e.preventDefault());
-window.addEventListener("drop", e => {
-  e.preventDefault();
-  dragDepth = 0;
-  overlay.classList.remove("show");
-  if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
-});
+  // arrastar e soltar em qualquer lugar
+  let dragDepth = 0;
+  const overlay = $("#dropOverlay");
+  window.addEventListener("dragenter", e => {
+    if (!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
+    dragDepth++;
+    overlay.classList.add("show");
+  });
+  window.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) overlay.classList.remove("show");
+  });
+  window.addEventListener("dragover", e => e.preventDefault());
+  window.addEventListener("drop", e => {
+    e.preventDefault();
+    dragDepth = 0;
+    overlay.classList.remove("show");
+    if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
 
-// colar imagem
-document.addEventListener("paste", e => {
-  const items = e.clipboardData && e.clipboardData.items;
-  if (!items) return;
-  const files = [];
-  for (const it of items) if (it.type.startsWith("image/")) {
-    const f = it.getAsFile();
-    if (f) files.push(f);
-  }
-  if (files.length) { e.preventDefault(); addFiles(files); }
-});
+  // colar imagem
+  document.addEventListener("paste", e => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) if (it.type.startsWith("image/")) {
+      const f = it.getAsFile();
+      if (f) files.push(f);
+    }
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
 
-// teclado
-document.addEventListener("keydown", e => {
-  const t = e.target;
-  const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
-  if (e.key === "Escape") {
-    if ($("#settingsModal").classList.contains("open")) { closeSettings(); return; }
-    if (state.selected) { closeDrawer(); return; }
-  }
-  if (typing || !state.selected) return;
-  if (e.key === "ArrowLeft") { e.preventDefault(); stepSelection(-1); }
-  else if (e.key === "ArrowRight") { e.preventDefault(); stepSelection(1); }
-  else if (e.key === "Escape") { closeDrawer(); }
-});
+  // teclado
+  document.addEventListener("keydown", e => {
+    const t = e.target;
+    const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    if (e.key === "Escape") {
+      if ($("#settingsModal").classList.contains("open")) { closeSettings(); return; }
+      if (state.selected) { closeDrawer(); return; }
+    }
+    if (typing || !state.selected) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); stepSelection(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); stepSelection(1); }
+    else if (e.key === "Escape") { closeDrawer(); }
+  });
+}
 
 /* ================================================================== */
 /* Inicialização                                                      */
 /* ================================================================== */
-if (location.protocol === "http:" && location.hostname === "127.0.0.1") {
-  let ollamaSession;
-  window.addEventListener("pageshow", () => {
-    ollamaSession = new EventSource("/api/ollama/session");
-  });
-  window.addEventListener("pagehide", () => ollamaSession?.close());
+function startOllamaSession() {
+  if (location.protocol === "http:" && location.hostname === "127.0.0.1") {
+    let ollamaSession;
+    window.addEventListener("pageshow", () => {
+      ollamaSession = new EventSource("/api/ollama/session");
+    });
+    window.addEventListener("pagehide", () => ollamaSession?.close());
+  }
 }
+
+bindEvents();
+startOllamaSession();
 
 (async function init() {
   const saved = await idbAll();

@@ -19,7 +19,8 @@ bash abrir_separador.sh
 O atalho abre o endereço local do app. Se precisar iniciar o servidor à
 mão, rode `python3 servidor_separador.py` na pasta do projeto e abra o
 endereço que aparecer no terminal. A porta padrão é 8765. No Windows,
-use `py servidor_separador.py` com o Python 3 instalado.
+dê dois cliques em `abrir_separador.bat` ou use `py servidor_separador.py`
+com o Python 3 instalado.
 
 Você também pode abrir `numerador_matriz.html` diretamente no navegador
 para recortar, numerar e exportar. As descrições automáticas usam o
@@ -42,7 +43,9 @@ instância. Você pode mudar o modelo em **Ajustes**.
 
 ## Sugerir respostas
 
-Baixe também o modelo de comparação com `ollama pull qwen2.5:1.5b`.
+Baixe também o modelo de comparação com `ollama pull qwen2.5:3b`
+(usa cerca de 2,5 GB de memória; em máquinas com pouca RAM, troque por
+`qwen2.5:1.5b`).
 Depois que a pergunta, a referência (quando houver) e as descrições
 estiverem prontas, clique em **Sugerir respostas** em **Cabeçalho** ou
 **Células**. A grade mostra o resultado e o motivo por recorte.
@@ -85,7 +88,7 @@ captura de teste que eu fornecer.”
    indicados acima ou os equivalentes do sistema.
 3. Verifique o Ollama com `ollama list`. Se o serviço estiver parado,
    inicie-o com `ollama serve` em outro terminal. Baixe apenas os modelos
-   ausentes com `ollama pull moondream` e `ollama pull qwen2.5:1.5b`.
+   ausentes com `ollama pull moondream` e `ollama pull qwen2.5:3b`.
    Espere cada download terminar e confirme os dois em `ollama list`.
 4. Abra o app com `bash abrir_separador.sh` no Linux ou
    `py servidor_separador.py` no Windows. Use o endereço local exibido.
@@ -93,7 +96,7 @@ captura de teste que eu fornecer.”
 
    ```bash
    curl "http://127.0.0.1:8765/api/ollama/status?model=moondream"
-   curl "http://127.0.0.1:8765/api/ollama/status?model=qwen2.5%3A1.5b"
+   curl "http://127.0.0.1:8765/api/ollama/status?model=qwen2.5%3A3b"
    ```
 
 5. Importe uma captura de teste com grade 3×3. Confira os nove recortes,
