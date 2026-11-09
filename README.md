@@ -69,3 +69,37 @@ Recortes sem legenda aparecem como **Incerta**.
 O navegador guarda as imagens, marcações e legendas por endereço e por
 perfil. Use o mesmo endereço e perfil para reencontrar o que salvou.
 O processamento das imagens e das legendas ocorre no computador.
+
+## Para o Claude na máquina do trabalho
+
+Abra o repositório no Claude Code e peça: “Siga o roteiro abaixo para
+fazer o Separador rodar nesta máquina. Valide o fluxo completo com uma
+captura de teste que eu fornecer.”
+
+1. Identifique o sistema operacional. Se o projeto já estiver clonado,
+   confira `git status --short --branch` e atualize a branch `main` com
+   `git pull --ff-only` quando ela estiver limpa. Se precisar clonar, use
+   o endereço da seção de instalação acima.
+2. Verifique o Python 3 e o Tesseract. Rode `tesseract --list-langs`
+   e confira se aparecem `por` e `eng`. Se faltarem, instale os pacotes
+   indicados acima ou os equivalentes do sistema.
+3. Verifique o Ollama com `ollama list`. Se o serviço estiver parado,
+   inicie-o com `ollama serve` em outro terminal. Baixe apenas os modelos
+   ausentes com `ollama pull moondream` e `ollama pull qwen2.5:1.5b`.
+   Espere cada download terminar e confirme os dois em `ollama list`.
+4. Abra o app com `bash abrir_separador.sh` no Linux ou
+   `py servidor_separador.py` no Windows. Use o endereço local exibido.
+   Com a porta padrão, estes dois comandos devem devolver `"ok": true`.
+
+   ```bash
+   curl "http://127.0.0.1:8765/api/ollama/status?model=moondream"
+   curl "http://127.0.0.1:8765/api/ollama/status?model=qwen2.5%3A1.5b"
+   ```
+
+5. Importe uma captura de teste com grade 3×3. Confira os nove recortes,
+   a leitura do cabeçalho e as legendas. Clique em **Sugerir respostas**
+   e verifique se a grade mostra os resultados para revisão. Informe
+   quais etapas passaram e o erro exato de qualquer etapa pendente.
+
+Os modelos são instalados em cada máquina. As imagens já importadas
+ficam no perfil do navegador em que foram abertas.
