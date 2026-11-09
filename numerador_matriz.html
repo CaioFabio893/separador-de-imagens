@@ -102,6 +102,14 @@
   }
   .side-meta { min-width: 0; flex: 1; }
   .side-remove { flex: 0 0 auto; padding: 4px 6px; font-size: .7rem; }
+  .banner-section { display: grid; gap: 14px; max-width: 850px; }
+  .banner-section h2, .banner-section h3, .banner-section p { margin: 0; }
+  .banner-section canvas { display: block; max-width: 100%; height: auto; border-radius: 8px; }
+  .banner-section .banner-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .comparison-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .comparison-result { font-size: .78rem; overflow-wrap: anywhere; }
+  .comparison-result.match { color: var(--green); }
+  .comparison-result.no_match { color: var(--red); }
   .side-name {
     font-size: .8rem; font-weight: 600;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -494,13 +502,17 @@ function setDescription(rec, cell, texto, modelo) {
     em: Date.now()
   };
   saveDescriptions();
+  if (rec.comparison) {
+    rec.comparison = null;
+    refreshComparison(rec);
+  }
 }
 function purgeInvalidDescriptions(rec) {
   const byCell = descriptions[rec.id];
   if (!byCell) return;
   if (!rec.res || !Array.isArray(rec.res.cells)) return;
   const valid = {};
-  for (const cell of rec.res.cells) {
+  for (const cell of [...rec.res.cells, rec.res.banner, rec.res.banner?.image].filter(Boolean)) {
     const d = byCell[cell.n];
     if (d && d.texto && d.geo === cellGeometry(rec, cell)) valid[cell.n] = d;
   }
@@ -532,6 +544,7 @@ const state = {
 const descRuntime = new Map();  // "id::n" -> { status: "running"|"error", message }
 const descNotices = new Map();  // id -> { code, message }
 let activeDescJob = null;       // só um lote/requisição por vez
+let activeComparison = false;
 const pendingDescriptions = new Set();
 
 /* ================================================================== */
@@ -684,10 +697,16 @@ function findGrid(gray, width, height, threshold, minGap, rowCoverage) {
   const minBlock = Math.max(4, Math.round(width * 0.02));
   const bands = complement(runs(rowWhite, width * rowCoverage, minGap), height)
     .filter(([a, b]) => b - a + 1 >= minBand)
-    .map(([y0, y1]) => ({
-      y0, y1,
-      blocks: columnBlocks(gray, width, y0, y1, threshold, minGap, minBlock)
-    }));
+    .map(([y0, y1]) => {
+      let blocks = columnBlocks(gray, width, y0, y1, threshold, minGap, minBlock);
+      if (blocks.length > 3) {
+        const widest = Math.max(...blocks.map(([a, b]) => b - a + 1));
+        // Desconsidera tiras estreitas na borda da captura.
+        blocks = blocks.filter(([a, b], i) =>
+          (i > 0 && i < blocks.length - 1) || b - a + 1 >= widest * 0.12);
+      }
+      return { y0, y1, blocks };
+    });
 
   let best = null;
   for (let start = 0; start < bands.length; start++) {
@@ -702,14 +721,25 @@ function findGrid(gray, width, height, threshold, minGap, rowCoverage) {
     const tolerance = Math.max(2, narrowest * 0.15);
     const rows = [first];
 
+    const matchesColumns = blocks => blocks.length === cols.length && blocks.every(([a, b], col) =>
+        Math.abs(a - cols[col][0]) <= tolerance && Math.abs(b - cols[col][1]) <= tolerance);
     for (let i = start + 1; i < bands.length; i++) {
       const next = bands[i];
       const gap = next.y0 - rows[rows.length - 1].y1 - 1;
-      const aligned = next.blocks.length === cols.length && next.blocks.every(([a, b], col) =>
-        Math.abs(a - cols[col][0]) <= tolerance && Math.abs(b - cols[col][1]) <= tolerance);
       const nextHeight = next.y1 - next.y0 + 1;
-      if (!aligned || Math.abs(nextHeight - rowHeight) > rowHeight * 0.3 ||
-          gap > rowHeight * 0.4) break;
+      if (gap > rowHeight * 0.4) break;
+      if (rows.length === 2 && cols.length === 3 && nextHeight > rowHeight * 1.3) {
+        // Se a última linha encostar no rodapé, confira os vãos só na altura esperada.
+        const pitch = rows[1].y0 - first.y0;
+        if (Math.abs(next.y0 - rows[1].y0 - pitch) <= rowHeight * 0.12) {
+          const y1 = next.y0 + Math.round((rowHeight + rows[1].y1 - rows[1].y0 + 1) / 2) - 1;
+          const blocks = columnBlocks(gray, width, next.y0, y1, threshold, minGap, minBlock)
+            .filter(([a, b]) => b >= cols[0][0] - tolerance && a <= cols.at(-1)[1] + tolerance);
+          if (matchesColumns(blocks)) rows.push({ y0: next.y0, y1, blocks });
+        }
+        break;
+      }
+      if (!matchesColumns(next.blocks) || Math.abs(nextHeight - rowHeight) > rowHeight * 0.3) break;
       rows.push(next);
     }
 
@@ -721,6 +751,59 @@ function findGrid(gray, width, height, threshold, minGap, rowCoverage) {
     if (!best || score > best.score) best = { rows, cols, bands, score };
   }
   return best;
+}
+
+function findBanner(data, width, grid, left, right) {
+  const firstRow = grid.rows[0];
+  const gridWidth = right - left + 1;
+  const minHeight = Math.max(8, (firstRow.y1 - firstRow.y0 + 1) * 0.25);
+  const band = grid.bands.findLast(({ y0, y1, blocks }) =>
+    y1 < firstRow.y0 && y1 - y0 + 1 >= minHeight &&
+    blocks.some(([a, b]) => Math.min(b, right) - Math.max(a, left) + 1 >= gridWidth * 0.72));
+  if (!band) return null;
+
+  const [x0, x1] = band.blocks.find(([a, b]) =>
+    Math.min(b, right) - Math.max(a, left) + 1 >= gridWidth * 0.72);
+  const { y0, y1 } = band;
+  const h = y1 - y0 + 1;
+  if (x1 - x0 + 1 < h * 1.6) return null;
+  const colors = new Map();
+  for (let y = y0 + 2; y <= y1 - 2; y += 2) {
+    for (let x = x0 + 2; x <= x1 - 2; x += 2) {
+      const i = (y * width + x) * 4;
+      const key = (data[i] >> 4) * 256 + (data[i + 1] >> 4) * 16 + (data[i + 2] >> 4);
+      const color = colors.get(key) || { count: 0, rgb: [data[i], data[i + 1], data[i + 2]] };
+      color.count++;
+      colors.set(key, color);
+    }
+  }
+  const bg = [...colors.values()].reduce((best, color) => color.count > best.count ? color : best).rgb;
+  const differs = (x, y) => {
+    const i = (y * width + x) * 4;
+    return Math.max(Math.abs(bg[0] - data[i]), Math.abs(bg[1] - data[i + 1]),
+      Math.abs(bg[2] - data[i + 2])) > 38;
+  };
+  const foreground = new Uint16Array(x1 - x0 + 1);
+  const inset = Math.max(2, Math.round(h * 0.05));
+  for (let x = x0 + inset; x <= x1 - inset; x++) {
+    for (let y = y0 + inset; y <= y1 - inset; y++) foreground[x - x0] += differs(x, y);
+  }
+  let image = null;
+  for (const [a, b] of runs(foreground, h * 0.46, Math.ceil(h * 0.42))) {
+    const w = b - a + 1;
+    const vertical = new Uint16Array(h);
+    for (let y = y0 + 1; y < y1; y++) {
+      for (let x = x0 + a; x <= x0 + b; x++) vertical[y - y0] += differs(x, y);
+    }
+    for (const [top, bottom] of runs(vertical, w * 0.5, Math.ceil(h * 0.42))) {
+      const height = bottom - top + 1;
+      if (w / height < 0.75 || w / height > 1.3) continue;
+      if (!image || w * height > image.area) {
+        image = { x0: x0 + a, x1: x0 + b, y0: y0 + top, y1: y0 + bottom, area: w * height };
+      }
+    }
+  }
+  return { x0, x1, y0, y1, bg, image };
 }
 
 function analyze(img, opt) {
@@ -762,18 +845,25 @@ function analyze(img, opt) {
   }
   if (!grid) return { error: "Não encontrei uma grade consistente nesta imagem." };
 
-  const { rows: gridRows, bands } = grid;
+  const { rows: gridRows } = grid;
   const cols = grid.cols.map((_, col) => [0, 1].map(edge => {
     const coordinates = gridRows.map(row => row.blocks[col][edge]).sort((a, b) => a - b);
     return coordinates[Math.floor(coordinates.length / 2)];
   }));
-  const bannerBands = bands.filter(band => !gridRows.includes(band))
-    .map(({ y0, y1 }) => ({ y0, y1 }));
-
   const toOrig = (a, b, sampleSize, originalSize) => {
     const start = clamp(Math.round(a * originalSize / sampleSize), 0, originalSize - 1);
     const end = clamp(Math.round((b + 1) * originalSize / sampleSize) - 1, start, originalSize - 1);
     return [start, end];
+  };
+  const box = ({ x0, x1, y0, y1 }, n) => {
+    const [x, right] = toOrig(x0, x1, aw, W);
+    const [y, bottom] = toOrig(y0, y1, ah, H);
+    return { n, x, y, w: right - x + 1, h: bottom - y + 1 };
+  };
+  const header = findBanner(data, aw, grid, cols[0][0], cols.at(-1)[1]);
+  const banner = header && {
+    ...box(header, "banner-text"), bg: header.bg,
+    image: header.image && box(header.image, "banner-image")
   };
 
   const cells = [];
@@ -794,7 +884,7 @@ function analyze(img, opt) {
     width: W, height: H,
     rows: gridRows.length,
     cols: cols.length,
-    banner: bannerBands,
+    banner,
     cells,
     scale
   };
@@ -1225,7 +1315,7 @@ function imageView(rec) {
 
   // abas
   const tabs = el("div", "tabs");
-  const tabDefs = [["map", "Mapa"], ["cells", "Células"], ["marks", "Marcações"]];
+  const tabDefs = [["map", "Mapa"], ["cells", "Células"], ["banner", "Cabeçalho"], ["marks", "Marcações"]];
   for (const [id, label] of tabDefs) {
     const b = el("button", state.tab === id ? "active" : "", label);
     b.dataset.tab = id;
@@ -1265,6 +1355,9 @@ function renderTabBody(rec) {
   else if (state.tab === "cells") {
     body.appendChild(cellsPanel(rec));
     updateDescToolbar(rec);
+  } else if (state.tab === "banner") {
+    body.appendChild(bannerPanel(rec));
+    if (rec.res?.banner && !rec.bannerOCR && !getDescription(rec, rec.res.banner)) readBanner(rec);
   } else body.appendChild(marksPanel(rec));
 }
 
@@ -1409,10 +1502,10 @@ function fillDescBox(box, rec, cell) {
 function refreshDescriptionUI(id, n) {
   const rec = state.images.get(id);
   if (!rec || !rec.res || !rec.res.cells) return;
-  const cell = rec.res.cells.find(c => c.n === n);
+  const cell = n === "banner-image" ? rec.res.banner?.image : rec.res.cells.find(c => c.n === n);
   if (!cell) return;
   document.querySelectorAll("[data-desc]").forEach(box => {
-    if (box.dataset.id === id && Number(box.dataset.n) === n) fillDescBox(box, rec, cell);
+    if (box.dataset.id === id && box.dataset.n === String(n)) fillDescBox(box, rec, cell);
   });
   if (state.selected && state.selected.id === id && state.selected.n === n) syncDrawerDescribe(rec, cell);
   updateDescToolbars();
@@ -1450,12 +1543,13 @@ function updateDescToolbar(rec) {
   const queued = pendingDescriptions.has(rec.id);
   if (job) {
     const isThis = job.id === rec.id;
-    let text = job.checking ? "Verificando o Ollama…" : `${job.done} de ${job.total} células analisadas`;
+    let text = job.checking ? "Verificando o Ollama…" : `${job.done} de ${job.total} recortes analisados`;
     if (job.cancelled) text = "Cancelando…";
     else if (!isThis) {
       text += ` em “${job.name}”`;
       if (queued) text += " · Esta imagem está na fila";
     }
+    else if (job.current === "banner-image") text += " · imagem do cabeçalho em análise";
     else if (job.current) text += ` · célula ${job.current} em análise`;
     progress.textContent = text;
     cancel.classList.remove("hidden");
@@ -1662,6 +1756,10 @@ async function describeOne(rec, cell, job) {
 }
 
 async function describeCells(rec, cells) {
+  if (activeComparison) {
+    toast("Aguarde a comparação das respostas terminar.");
+    return;
+  }
   if (activeDescJob) {
     toast("Já existe um lote em andamento. Cancele ou aguarde.");
     return;
@@ -1705,11 +1803,11 @@ async function describeCells(rec, cells) {
 
     const scope = `“${rec.name}”`;
     if (job.cancelled) {
-      toast(`Lote cancelado: ${job.done} de ${job.total} células analisadas em ${scope}.`);
+      toast(`Lote cancelado: ${job.done} de ${job.total} recortes analisados em ${scope}.`);
     } else if (job.failed) {
-      toast(`${job.done - job.failed} de ${job.total} células descritas em ${scope}; ${job.failed} falhou/falharam.`);
+      toast(`${job.done - job.failed} de ${job.total} recortes descritos em ${scope}; ${job.failed} falhou/falharam.`);
     } else {
-      toast(`${job.total} célula(s) descrita(s) em ${scope}.`);
+      toast(`${job.total} recorte(s) descrito(s) em ${scope}.`);
     }
   } finally {
     activeDescJob = null;
@@ -1719,12 +1817,13 @@ async function describeCells(rec, cells) {
 }
 
 function startNextDescription() {
-  if (activeDescJob) return;
+  if (activeDescJob || activeComparison) return;
   for (const id of pendingDescriptions) {
     pendingDescriptions.delete(id);
     const rec = state.images.get(id);
     if (!rec?.res?.cells) continue;
-    const cells = rec.res.cells.filter(cell => !getDescription(rec, cell));
+    const cells = [rec.res.banner?.image, ...rec.res.cells]
+      .filter(cell => cell && !getDescription(rec, cell));
     if (!cells.length) continue;
     describeCells(rec, cells);
     return;
@@ -1738,7 +1837,7 @@ function retryCellDescription(id, n) {
   }
   const rec = state.images.get(id);
   if (!rec || !rec.res || !rec.res.cells) return;
-  const cell = rec.res.cells.find(c => c.n === n);
+  const cell = n === "banner-image" ? rec.res.banner?.image : rec.res.cells.find(c => c.n === n);
   if (!cell) return;
   describeCells(rec, [cell]);
 }
@@ -1751,6 +1850,213 @@ function cancelDescriptionJob(id) {
   updateDescToolbars();
 }
 
+/* ----------------------------- CABEÇALHO -------------------------- */
+function bannerPanel(rec) {
+  const panel = el("section", "banner-section");
+  panel.append(el("h2", null, "Cabeçalho"));
+  const banner = rec.res?.banner;
+  if (!banner) {
+    panel.append(el("p", "tiny", "Nenhum cabeçalho foi detectado acima da grade."));
+    return panel;
+  }
+
+  panel.append(makeThumb(rec.img, banner, 800), el("h3", null, "Texto do cabeçalho"));
+  const text = el("p", "banner-text");
+  text.dataset.bannerText = rec.id;
+  text.setAttribute("aria-live", "polite");
+  panel.append(text);
+  fillBannerText(text, rec);
+  panel.append(comparisonControls(rec, true));
+  const read = el("button", null, "Ler texto");
+  read.addEventListener("click", () => readBanner(rec));
+  panel.append(read, el("h3", null, "Imagem de referência"));
+  if (!banner.image) {
+    panel.append(el("p", "tiny", "Nenhuma imagem quadrada detectada no cabeçalho."));
+    return panel;
+  }
+  const describe = el("button", null, "Descrever imagem de referência");
+  describe.addEventListener("click", () => retryCellDescription(rec.id, banner.image.n));
+  panel.append(makeThumb(rec.img, banner.image, 230), buildDescBox(rec, banner.image, "banner"), describe);
+  return panel;
+}
+
+function fillBannerText(node, rec) {
+  node.textContent = rec.bannerOCR?.message || getDescription(rec, rec.res.banner)?.texto || "Aguardando leitura…";
+}
+
+async function readBanner(rec) {
+  const banner = rec.res?.banner;
+  if (!banner || rec.bannerOCR?.running) return;
+  const refresh = () => {
+    const node = document.querySelector("[data-banner-text]");
+    if (node?.dataset.bannerText === rec.id && rec.res.banner === banner) fillBannerText(node, rec);
+  };
+  if (location.protocol === "file:") {
+    rec.bannerOCR = { message: "Abra o Separador pelo atalho local para ler o texto." };
+    refresh();
+    return;
+  }
+  rec.bannerOCR = { running: true, message: "Lendo o texto…" };
+  const reading = rec.bannerOCR;
+  refresh();
+  try {
+    const photo = banner.image;
+    const edge = Math.max(1, Math.round(banner.h * 0.035));
+    const gutter = Math.round(banner.h * 0.1);
+    let x = banner.x + edge, right = banner.x + banner.w - edge;
+    const y = banner.y + edge, height = banner.h - edge * 2;
+    const photoOnRight = photo && photo.x >= banner.x + banner.w * 0.6;
+    const photoOnLeft = photo && photo.x + photo.w <= banner.x + banner.w * 0.4;
+    if (photoOnRight) right = photo.x - gutter;
+    else if (photoOnLeft) x = photo.x + photo.w + gutter;
+    const w = right - x;
+    const scale = Math.min(3, 1200 / w);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(height * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(rec.img, x, y, w, height, 0, 0, canvas.width, canvas.height);
+    if (photo && !photoOnLeft && !photoOnRight) {
+      const sx = canvas.width / w, sy = canvas.height / height;
+      ctx.fillStyle = `rgb(${banner.bg.join(",")})`;
+      ctx.fillRect((photo.x - x) * sx, (photo.y - y) * sy, photo.w * sx, photo.h * sy);
+    }
+    const blob = await toBlob(canvas);
+    const response = await fetch("/api/banner/ocr", { method: "POST", body: blob });
+    const result = await response.json().catch(() => null);
+    if (!result?.ok) throw new Error(result?.message || "Servidor sem suporte à leitura. Reinicie o Separador.");
+    if (state.images.get(rec.id) !== rec || rec.res.banner !== banner) return;
+    const text = result.text.trim();
+    if (text) setDescription(rec, banner, text, "tesseract");
+    rec.bannerOCR = text ? null : { message: "Nenhum texto legível encontrado." };
+  } catch (error) {
+    if (rec.bannerOCR === reading) rec.bannerOCR = { message: error.message };
+  } finally {
+    refresh();
+  }
+}
+
+/* ---------------------------- COMPARAÇÃO -------------------------- */
+function comparisonControls(rec, showGrid = false) {
+  const panel = el("div", "comparison-controls");
+  panel.dataset.comparisonControls = "1";
+  panel.dataset.showGrid = showGrid ? "1" : "0";
+  fillComparisonControls(panel, rec);
+  return panel;
+}
+
+function fillComparisonControls(panel, rec) {
+  const comparison = rec.comparison;
+  const run = el("button", null, "Sugerir respostas");
+  run.disabled = Boolean(comparison?.running);
+  run.addEventListener("click", () => compareCells(rec));
+  const message = el("span", "tiny", comparison?.message || "Compare a pergunta do cabeçalho com as legendas.");
+  message.setAttribute("role", "status");
+  panel.replaceChildren(run, message);
+  if (!comparison?.suggestions) return;
+
+  if (panel.dataset.showGrid === "1") {
+    const show = el("button", null, "Ver sugestões na grade");
+    show.addEventListener("click", () => state.ui.tabs.querySelector('[data-tab="cells"]')?.click());
+    panel.append(show);
+  }
+  const apply = el("button", null, "Marcar sugestões pendentes");
+  apply.addEventListener("click", () => applyComparison(rec));
+  panel.append(apply);
+}
+
+function fillComparisonResult(node, rec) {
+  const item = rec.comparison?.suggestions?.[node.dataset.comparisonCell];
+  node.className = item ? `comparison-result ${item.status}` : "comparison-result hidden";
+  if (!item) { node.textContent = ""; return; }
+  const label = { match: "Corresponde", no_match: "Não corresponde", uncertain: "Incerta" }[item.status];
+  node.replaceChildren(el("strong", null, label), document.createTextNode(` · ${item.reason}`));
+}
+
+function refreshComparison(rec) {
+  if (state.activeId !== rec.id) return;
+  document.querySelectorAll("[data-comparison-controls]").forEach(node => fillComparisonControls(node, rec));
+  document.querySelectorAll("[data-comparison-cell]").forEach(node => fillComparisonResult(node, rec));
+}
+
+async function compareCells(rec) {
+  if (activeComparison) {
+    toast("Já existe uma comparação em andamento.");
+    return;
+  }
+  if (location.protocol === "file:") {
+    toast("Abra o Separador pelo atalho local para comparar as respostas.");
+    return;
+  }
+  if (activeDescJob) {
+    toast("Aguarde o lote de descrições terminar.");
+    return;
+  }
+  const { banner, cells } = rec.res;
+  const question = banner && getDescription(rec, banner)?.texto;
+  const reference = banner?.image && getDescription(rec, banner.image)?.texto;
+  if (!question || (banner.image && !reference)) {
+    toast("Leia a pergunta e descreva a imagem de referência na aba Cabeçalho antes de comparar.");
+    return;
+  }
+  const described = cells.map(cell => [cell.n, getDescription(rec, cell)?.texto]).filter(([, caption]) => caption);
+  if (!described.length) {
+    toast("Gere as descrições das células antes de comparar.");
+    return;
+  }
+
+  const comparison = { running: true, message: "Comparando as descrições com a pergunta…" };
+  activeComparison = true;
+  rec.comparison = comparison;
+  refreshComparison(rec);
+  const current = () => state.images.get(rec.id) === rec && rec.comparison === comparison;
+  const suggestions = Object.fromEntries(cells.map(cell => [cell.n, {
+    status: "uncertain",
+    reason: getDescription(rec, cell) ? "Sem uma avaliação válida." : "Sem descrição da imagem."
+  }]));
+  try {
+    for (let offset = 0; offset < described.length; offset += 12) {
+      if (!current()) return;
+      const batch = Object.fromEntries(described.slice(offset, offset + 12)
+        .map(([n, caption]) => [n, caption.slice(0, 1200)]));
+      const response = await fetch("/api/banner/compare", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: question.slice(0, 1800), reference: reference?.slice(0, 1200) || "", cells: batch }),
+        signal: AbortSignal.timeout(VISION_TIMEOUT_MS)
+      });
+      const result = await response.json().catch(() => null);
+      if (!result?.ok) throw new Error(result?.message || "O servidor local não respondeu à comparação.");
+      Object.assign(suggestions, result.suggestions);
+    }
+    if (!current()) return;
+    comparison.suggestions = suggestions;
+    const matches = Object.values(suggestions).filter(item => item.status === "match").length;
+    comparison.message = `${matches} sugestão(ões) de correspondência. Confira os motivos na grade.`;
+  } catch (error) {
+    comparison.message = error.message;
+  } finally {
+    activeComparison = false;
+    comparison.running = false;
+    if (current()) refreshComparison(rec);
+    startNextDescription();
+  }
+}
+
+function applyComparison(rec) {
+  const suggestions = rec.comparison?.suggestions;
+  const pending = rec.res.cells.filter(cell =>
+    suggestions?.[cell.n]?.status === "match" && getMark(rec.id, cell.n).status === "pendente");
+  if (!pending.length) { toast("Nenhuma sugestão pendente para marcar."); return; }
+  if (!confirm(`Marcar ${pending.length} célula(s) sugerida(s)?`)) return;
+  for (const cell of pending) {
+    setMark(rec.id, cell.n, { status: "marcada" });
+    syncStatusEverywhere(rec.id, cell.n);
+  }
+  refreshCounts();
+  toast(`${pending.length} célula(s) marcada(s).`);
+}
+
 /* ------------------------------ CÉLULAS --------------------------- */
 function cellsPanel(rec) {
   const panel = el("div", "panel-cells");
@@ -1759,6 +2065,7 @@ function cellsPanel(rec) {
     return panel;
   }
   panel.appendChild(descriptionToolbar(rec));
+  if (rec.res.banner) panel.append(comparisonControls(rec));
   const grid = el("div", "cells");
   for (const cell of rec.res.cells) grid.appendChild(cellCard(rec, cell));
   panel.appendChild(grid);
@@ -1803,7 +2110,10 @@ function cellCard(rec, cell) {
   });
   nota.addEventListener("input", () => setMark(id, n, { nota: nota.value }));
 
-  meta.append(sel, nota, buildDescBox(rec, cell, "card"));
+  const comparison = el("div");
+  comparison.dataset.comparisonCell = String(n);
+  fillComparisonResult(comparison, rec);
+  meta.append(sel, nota, buildDescBox(rec, cell, "card"), comparison);
   card.append(thumb, meta);
   return card;
 }
@@ -2170,6 +2480,7 @@ async function addFiles(fileList) {
       if (res.cells?.length) {
         firstGridId ??= id;
         if (location.protocol !== "file:") pendingDescriptions.add(id);
+        if (res.banner && !getDescription(rec, res.banner)) readBanner(rec);
       }
       ok++;
       if (res.error) toast(`Grade não detectada em "${file.name}". Ajuste em ⚙ e reprocesse.`);
@@ -2190,6 +2501,8 @@ async function addFiles(fileList) {
 }
 
 function resetDescriptionStatus(rec) {
+  rec.bannerOCR = null;
+  rec.comparison = null;
   descNotices.delete(rec.id);
   for (const key of descRuntime.keys()) {
     if (key.startsWith(rec.id + "::")) descRuntime.delete(key);

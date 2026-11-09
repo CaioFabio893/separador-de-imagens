@@ -40,8 +40,23 @@ inicia ao abrir uma aba e encerra o processo que iniciou após fechar a
 última aba. Se o Ollama já estiver em execução, o Separador usa essa
 instância. Você pode mudar o modelo em **Ajustes**.
 
+## Sugerir respostas
+
+Baixe também o modelo de comparação com `ollama pull qwen2.5:1.5b`.
+Depois que a pergunta, a referência (quando houver) e as descrições
+estiverem prontas, clique em **Sugerir respostas** em **Cabeçalho** ou
+**Células**. A grade mostra o resultado e o motivo por recorte.
+Revise as sugestões antes de clicar em **Marcar sugestões pendentes**.
+Recortes sem legenda aparecem como **Incerta**.
+
 ## Uso e armazenamento
 
+- Em **Cabeçalho**, veja o retângulo acima da grade, a transcrição do
+  texto e, se houver uma imagem quadrada, o recorte e a descrição dela.
+  Para a transcrição, instale o Tesseract com os idiomas português e
+  inglês. Em Ubuntu ou Debian, use
+  `sudo apt install tesseract-ocr tesseract-ocr-por tesseract-ocr-eng`.
+  A descrição da imagem de referência usa o Ollama.
 - Adicione imagens pelo botão, arraste arquivos ou cole uma captura
   com **Ctrl+V**.
 - Em **Mapa**, veja a grade numerada. Em **Células**, abra os recortes e
