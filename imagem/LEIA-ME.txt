@@ -1,0 +1,66 @@
+ROBÔ e-CAC - ROTEIRO DE INSTALAÇÃO EM OUTRA MÁQUINA
+====================================================
+
+O QUE O ROBÔ FAZ
+- Abre o e-CAC no Google Chrome e clica em "Acesso Gov BR".
+- Para na imagem de verificação e salva um print dela como imagem.png
+  (na mesma pasta do robô; o print novo substitui o antigo).
+- Você responde pelo teclado com os números das imagens e o robô clica
+  nelas e em Verificar.
+
+
+ARQUIVOS QUE PRECISAM IR JUNTOS (na mesma pasta)
+- robo_ecac.py   -> o robô
+- ROBO.bat       -> atalho para abrir o robô
+- INSTALAR.bat   -> instala o que falta
+- LEIA-ME.txt    -> este roteiro
+(O imagem.png não precisa: ele é criado sozinho.)
+
+
+PASSO 1 - Copiar a pasta
+- Copie esta pasta inteira para a outra máquina (pendrive, rede, e-mail
+  em .zip...). Pode colocar em qualquer lugar, ex.: Área de Trabalho.
+
+PASSO 2 - Instalar o Google Chrome (se ainda não tiver)
+- https://www.google.com/chrome/
+
+PASSO 3 - Instalar o Python (se ainda não tiver)
+- Baixe em https://www.python.org/downloads/ (versão 3.10 ou mais nova).
+- IMPORTANTE: na primeira tela da instalação, MARQUE a caixa
+  "Add python.exe to PATH" e depois clique em "Install Now".
+
+PASSO 4 - Rodar o INSTALAR.bat
+- Abra a pasta e dê dois cliques (ou selecione e Enter) em INSTALAR.bat.
+- Ele confere o Python e instala o Selenium. Precisa de internet.
+- No fim deve aparecer "Tudo pronto!".
+
+PASSO 5 - Usar
+- Abra o ROBO.bat.
+- Na primeira vez pode demorar um pouco: o Selenium baixa sozinho o
+  driver do Chrome (precisa de internet).
+
+
+COMO RESPONDER NA JANELA PRETA
+   1 2 3
+   4 5 6    <- posição das imagens
+   7 8 9
+
+- Digite os números e Enter (ex.: 1 5 9): clica nas imagens e depois em
+  Verificar sozinho, e salva o imagem.png da próxima tela.
+- v + Enter: clica em Verificar / Pular / Próximo (sem marcar imagens).
+- p + Enter: tira um print novo da imagem.
+- s + Enter: sai do robô (o Chrome continua aberto).
+
+ATALHOS SEM MOUSE
+- Abrir a pasta: Win+R, cole o caminho da pasta, Enter.
+- Abrir um arquivo na pasta: digite o começo do nome (ex.: ROBO) e Enter.
+- Trocar entre o Chrome e a janela preta: Alt+Tab.
+
+
+PROBLEMAS COMUNS
+- "python não é reconhecido": o Python foi instalado sem marcar
+  "Add python.exe to PATH". Reinstale marcando essa opção.
+- O Chrome não abre / erro de driver: atualize o Chrome e confira a
+  internet; rode o INSTALAR.bat de novo.
+- Os cliques caem fora das imagens: deixe o Chrome maximizado e o zoom
+  em 100% (Ctrl+0).

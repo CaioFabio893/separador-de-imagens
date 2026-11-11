@@ -1,0 +1,288 @@
+GUIA DE INSTALAÇÃO EM OUTRO COMPUTADOR
+Separador de Imagens + DeepSeek + extensão + terminal do robô
+
+Este roteiro é para Windows 10 ou 11. Faça os passos na ordem indicada.
+Você precisa de internet, Google Chrome e acesso a uma conta no DeepSeek.
+
+COMO O PROCESSO FUNCIONA
+
+Imagem selecionada -> PDF numerado -> extensão envia ao DeepSeek ->
+resposta salva em TXT -> envio ao terminal do robô, quando ele está aberto.
+
+O recorte das imagens é feito no computador. O PDF, que contém essas imagens,
+é enviado ao site do DeepSeek para obter a resposta.
+
+O DeepSeek usado aqui é o site. Este fluxo não pede chave de API.
+A extensão necessária é "PDF → DeepSeek", que está dentro do projeto.
+Ela é uma extensão deste projeto, não uma extensão oficial do DeepSeek.
+
+
+1. BAIXAR O PROJETO
+
+Abra:
+https://github.com/CaioFabio893/separador-de-imagens
+
+Clique em "Code" e depois em "Download ZIP".
+Também é possível baixar diretamente:
+https://github.com/CaioFabio893/separador-de-imagens/archive/refs/heads/main.zip
+
+Extraia o ZIP inteiro para uma pasta no seu computador, por exemplo:
+Área de Trabalho\separador-de-imagens
+
+Abra a pasta extraída que contém o arquivo abrir_separador.bat.
+Não execute os arquivos de dentro do ZIP.
+Mantenha a estrutura completa de pastas, principalmente imagem e pdf.
+
+
+2. INSTALAR O GOOGLE CHROME
+
+Download oficial:
+https://www.google.com/chrome/
+
+Instale e abra o Chrome.
+
+Instruções oficiais:
+https://support.google.com/chrome/answer/95346?hl=pt-BR
+
+
+3. INSTALAR O PYTHON
+
+Download oficial para Windows:
+https://www.python.org/downloads/windows/
+
+Instale uma versão estável do Python 3, a partir da 3.12.
+O projeto foi validado neste computador com Python 3.12.
+O instalador atual também pode ser apresentado como "Python install manager".
+
+Depois de instalar, abra uma nova janela do Terminal ou Prompt de Comando e
+execute, uma linha de cada vez:
+
+py --version
+python --version
+
+Os comandos devem mostrar uma versão do Python 3.
+Se não forem reconhecidos, confira a instalação e abra novamente o terminal.
+No instalador tradicional, habilite a opção "Add python.exe to PATH", se ela
+aparecer, e inclua o launcher "py".
+
+Ajuda oficial para instalação e problemas com esses comandos:
+https://docs.python.org/3/using/windows.html
+
+Para o separador e a extensão, não é necessário instalar bibliotecas Python.
+
+
+4. ABRIR O SEPARADOR ANTES DE INSTALAR A EXTENSÃO
+
+Na pasta principal do projeto, dê dois cliques em:
+
+abrir_separador.bat
+
+Ele inicia o servidor local e abre a página do separador no Chrome.
+Mantenha a janela do servidor aberta durante o uso.
+
+A página normalmente fica em:
+http://127.0.0.1:8765/numerador_matriz.html
+
+Se outra porta for escolhida, use o endereço mostrado pelo programa.
+Não abra numerador_matriz.html diretamente pelo Explorador de Arquivos.
+
+Nesta primeira execução, o servidor cria automaticamente:
+pdf\extensao_deepseek\config_local.js
+
+Esse arquivo contém o token local que conecta a extensão ao servidor.
+Ele não vem no ZIP do GitHub. Por isso, abra o servidor primeiro.
+Não precisa preencher esse arquivo nem pedir uma chave de API ao DeepSeek.
+Mantenha o token local; não o publique nem envie em mensagens.
+
+
+5. INSTALAR A EXTENSÃO NO CHROME
+
+Use a janela do Chrome aberta pelo abrir_separador.bat.
+O programa utiliza o perfil "Default"; instale a extensão nesse mesmo perfil.
+
+Na barra de endereços do Chrome, digite:
+chrome://extensions
+
+Depois:
+1) Ative "Modo do desenvolvedor", no canto superior direito.
+2) Clique em "Carregar sem compactação".
+3) Selecione a pasta pdf\extensao_deepseek dentro do projeto extraído.
+4) Confirme que aparece a extensão "PDF → DeepSeek".
+5) Deixe a extensão ativada.
+
+Selecione a pasta que contém manifest.json, background.js, deepseek.js e o
+config_local.js gerado no passo anterior.
+
+Se desejar, fixe a extensão pelo ícone de quebra-cabeça do Chrome.
+O botão da extensão verifica se há PDF na fila; ele não precisa abrir um menu.
+
+Procedimento oficial do Chrome para carregar uma extensão local:
+https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked
+
+
+6. ENTRAR NO DEEPSEEK
+
+Na mesma janela/perfil do Chrome, abra:
+https://chat.deepseek.com/
+
+Entre na sua conta. Se o site pedir confirmação ou verificação, conclua
+manualmente. Confirme que você consegue abrir uma conversa e escrever nela.
+
+Mantenha essa janela normal do Chrome aberta durante o uso.
+A extensão abre uma nova aba para enviar cada PDF.
+A janela de navegador que o robô abre pode usar outro perfil; mantenha também
+o Chrome onde você instalou a extensão.
+
+O endereço do chat está disponível no site oficial:
+https://www.deepseek.com/en/
+
+
+7. CONFERIR A CONEXÃO E FAZER O PRIMEIRO TESTE
+
+Com o servidor e o Chrome abertos, visite:
+http://127.0.0.1:8765/api/status
+
+O resultado deve conter servidor "separador" e ok true.
+
+Depois visite:
+http://127.0.0.1:8765/api/fluxo
+
+Procure o campo extensao. Ele deve estar como true.
+Isso confirma que a extensão se comunicou com o servidor recentemente.
+O login no DeepSeek precisa estar pronto também, conforme o passo 6.
+
+Se o programa escolheu outra porta, substitua 8765 nos dois endereços.
+Aguarde cerca de 30 segundos ou clique no ícone "PDF → DeepSeek" para verificar
+a fila imediatamente.
+
+Para o primeiro teste, mantenha o robô fechado:
+1) Use uma imagem de teste sem dados privados. Você pode criar no Paint uma
+   grade 3 x 3 com figuras simples e um cabeçalho indicando o que selecionar.
+2) Abra a página do separador.
+3) Selecione a imagem.
+4) Confira se a grade foi reconhecida e numerada.
+5) Clique em "Gerar PDF e enviar ao DeepSeek".
+6) Aguarde o envio do PDF e a resposta.
+7) Confira a resposta na página e o novo TXT dentro de pdf\respostas.
+
+Se a grade não for detectada, corrija a imagem antes de continuar.
+Um TXT antigo que veio no projeto não comprova o teste: confira se foi gerada
+uma resposta nova para a imagem escolhida.
+
+Depois desse teste, aguarde dois minutos com o robô fechado antes de abri-lo.
+Assim, a tentativa de entregar a resposta de teste ao terminal já terá expirado.
+
+Ao concluir uma nova resposta, o fluxo pode remover PDFs e TXTs antigos.
+Faça uma cópia dos resultados que desejar guardar antes de iniciar um novo lote.
+
+
+8. PREPARAR O ROBÔ, SE TAMBÉM FOR USÁ-LO
+
+O robô incluído no projeto usa Selenium. Essa dependência é do robô;
+o servidor do separador continua usando apenas a biblioteca padrão do Python.
+
+No terminal do Windows, instale e confira:
+
+python -m pip install selenium
+python -c "import selenium; print(selenium.__version__)"
+
+Use o mesmo Python que executará o robô.
+A instalação oficial do Selenium está descrita em:
+https://www.selenium.dev/documentation/webdriver/getting_started/
+
+Quando necessário, o Selenium Manager obtém o driver do navegador
+automaticamente; a primeira execução pode precisar de internet:
+https://www.selenium.dev/documentation/selenium_manager/
+
+Para iniciar, abra o arquivo:
+imagem\ROBO.bat
+
+Deixe apenas uma instância do robô aberta, com o terminal aguardando a resposta.
+Mantenha o robô dentro da pasta imagem do mesmo projeto usado pelo servidor.
+
+Quando uma nova resposta numérica chega do DeepSeek, o servidor primeiro salva
+o TXT. Depois tenta entregar essa resposta, seguida de Enter, ao terminal do
+robô existente. Não abre outro terminal do robô.
+
+A resposta deve conter números de 1 a 9 separados por vírgula, espaço ou
+ponto e vírgula, por exemplo:
+2,9
+
+Texto explicativo ou resposta fora desse formato permanece no TXT e não é
+enviado ao terminal. Uma resposta antiga não é reenviada automaticamente.
+
+O envio ao terminal depende de o robô estar aberto e aguardando entrada.
+Abrir o robô, sozinho, não comprova que uma nova imagem foi enviada: confira
+o andamento na página do separador e a geração de um novo TXT.
+
+
+9. ORDEM PARA USAR NO DIA A DIA
+
+1) Abra abrir_separador.bat.
+2) Deixe o Chrome com a extensão ativada e o DeepSeek conectado à sua conta.
+3) Se for usar o robô, abra imagem\ROBO.bat.
+4) Envie a imagem atual pelo fluxo do separador.
+5) Aguarde o novo TXT e, se aplicável, o envio ao terminal.
+
+
+10. SE ALGUMA ETAPA NÃO FUNCIONAR
+
+"py" ou "python" não é reconhecido:
+Confira o passo 3 e abra novamente o terminal depois da instalação.
+
+"ModuleNotFoundError: No module named selenium":
+Execute python -m pip install selenium com o Python usado pelo robô.
+
+A página em 127.0.0.1 não abre:
+Abra abrir_separador.bat e confira o endereço exibido pelo servidor.
+
+"config_local.js" ausente ou erro ao carregar a extensão:
+Inicie o servidor da mesma pasta do projeto antes de carregar a extensão.
+
+"Extensão não conectada" ou extensao false:
+Confira se ela está ativada no perfil do Chrome aberto pelo atalho.
+Clique no ícone da extensão e aguarde aproximadamente 30 segundos.
+
+"Acesso não autorizado" ou erro 403 na extensão:
+Confira se o servidor e a extensão vieram da mesma pasta do projeto.
+Reinicie o servidor e recarregue a extensão em chrome://extensions.
+O token é local; não substitua por uma chave de API do DeepSeek.
+
+O PDF permanece na fila:
+Mantenha uma janela normal do Chrome aberta e clique no ícone da extensão.
+Em outra máquina, a chamada imediata da página pode não localizar o novo ID
+da extensão; a verificação periódica e o clique no ícone continuam disponíveis.
+
+DeepSeek pede login:
+Conclua o login na aba aberta e mantenha o mesmo perfil do Chrome.
+
+O site abre, mas o anexo ou o botão de envio não é encontrado:
+Atualize o projeto, recarregue a extensão e atualize a aba do DeepSeek.
+Mudanças na interface do site podem exigir ajuste na extensão.
+
+O TXT foi salvo, mas nada entrou no terminal:
+Confira se há apenas um robô aberto pelo imagem\ROBO.bat da mesma pasta,
+aguardando entrada, e se a resposta contém somente a linha numérica esperada.
+A entrega real ao terminal precisa ser conferida também na máquina de destino.
+
+Atualizou os arquivos da extensão?
+Clique em "Recarregar" no cartão dela em chrome://extensions e atualize as
+abas do DeepSeek. Se você mover a pasta do projeto, carregue a extensão da
+nova pasta novamente.
+
+Preserve pdf\.fluxo.json e pdf\respostas ao atualizar o projeto.
+Se houver arquivos locais modificados, faça uma cópia antes da atualização.
+
+
+CHECKLIST FINAL
+
+[ ] Projeto extraído fora do ZIP.
+[ ] Google Chrome instalado.
+[ ] Comandos py e python funcionando.
+[ ] Servidor local aberto.
+[ ] config_local.js gerado pelo servidor.
+[ ] Extensão PDF → DeepSeek ativada no perfil correto.
+[ ] Login no DeepSeek concluído.
+[ ] Campo extensao true em /api/fluxo.
+[ ] Teste com imagem sintética gerou um TXT novo.
+[ ] Se for usar o robô: Selenium instalado e terminal aguardando entrada.
