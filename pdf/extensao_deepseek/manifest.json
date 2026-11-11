@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "PDF → DeepSeek",
+  "version": "3.1.1",
+  "minimum_chrome_version": "120",
+  "description": "Envia o PDF gerado ao DeepSeek e salva a resposta em TXT na pasta respostas.",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://chat.deepseek.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "PDF → DeepSeek"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ],
+      "js": [
+        "deepseek.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "http://127.0.0.1/*"
+    ]
+  }
+}

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Abre o Separador de Imagens no navegador.
-# Sobe o servidor local (necessário para o navegador salvar as imagens e as
-# marcações entre sessões e para a ponte opcional com o Ollama) e abre a página.
+# Sobe o servidor local para manter o mesmo endereço e abre a página.
 
 set -u
 
@@ -13,7 +12,7 @@ LOG_FILE="/tmp/separador_imagens.log"
 cd "$DIR" || exit 1
 
 health() {
-  curl -s --max-time 2 "http://127.0.0.1:$1/api/ollama/status" 2>/dev/null \
+  curl -s --max-time 2 "http://127.0.0.1:$1/api/status" 2>/dev/null \
     | grep -q '"servidor"[[:space:]]*:[[:space:]]*"separador"'
 }
 

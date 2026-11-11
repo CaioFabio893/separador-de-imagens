@@ -3,656 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Numerador de Matriz</title>
+<title>Gerar PDF de imagens numeradas</title>
 <style>
-  :root {
-    --bg: #f3f4f6;
-    --panel: #ffffff;
-    --line: #e5e7eb;
-    --txt: #111827;
-    --muted: #6b7280;
-    --red: #dc2626;
-    --green: #059669;
-    --blue: #2563eb;
-    --amber: #d97706;
-    --radius: 12px;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--txt);
-    overflow: hidden;
-  }
-  button {
-    font: inherit; font-size: .84rem; cursor: pointer;
-    border: 1px solid var(--line); background: var(--panel);
-    padding: 7px 13px; border-radius: 8px; color: var(--txt);
-    transition: border-color .12s, background .12s;
-  }
-  button:hover { border-color: #c7ccd3; }
-  button:disabled { opacity: .5; cursor: default; }
-  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-  button.primary:hover { background: #1d4ed8; }
-  button.danger:hover { border-color: var(--red); color: var(--red); }
-  .icon-btn {
-    padding: 4px 9px; font-size: .95rem; line-height: 1;
-    border: 1px solid transparent; background: transparent; color: var(--muted);
-  }
-  .icon-btn:hover { background: #f1f5f9; color: var(--txt); border-color: transparent; }
-  input[type="text"], input[type="number"], select, textarea {
-    font: inherit; font-size: .84rem;
-    border: 1px solid var(--line); border-radius: 7px;
-    padding: 6px 8px; background: #fff; color: var(--txt); width: 100%;
-  }
-  textarea { resize: vertical; min-height: 60px; }
-  input:focus, select:focus, textarea:focus { outline: 2px solid #93c5fd; outline-offset: 0; }
-  .tiny { font-size: .72rem; color: var(--muted); }
-  .hidden { display: none !important; }
-
-  /* ---------- barra superior ---------- */
-  .appbar {
-    height: 58px; display: flex; align-items: center; gap: 12px;
-    padding: 0 16px; background: var(--panel);
-    border-bottom: 1px solid var(--line);
-    position: relative; z-index: 30;
-  }
-  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: .98rem; }
-  .brand .logo {
-    width: 30px; height: 30px; border-radius: 8px;
-    background: linear-gradient(135deg, #2563eb, #7c3aed);
-    display: grid; place-items: center; color: #fff; font-size: .95rem;
-  }
-  .appbar .spacer { flex: 1; }
-  .app-status { font-size: .78rem; color: var(--muted); }
-
-  /* ---------- layout ---------- */
-  .shell { display: flex; height: calc(100vh - 58px); }
-  .sidebar {
-    width: 268px; flex: 0 0 268px; background: var(--panel);
-    border-right: 1px solid var(--line);
-    display: flex; flex-direction: column; overflow: hidden;
-  }
-  .side-head {
-    padding: 13px 14px 6px; font-size: .68rem; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--muted);
-    display: flex; justify-content: space-between; align-items: center;
-  }
-  .side-list {
-    flex: 1; overflow: auto; padding: 6px;
-    display: flex; flex-direction: column; gap: 3px;
-  }
-  .side-item {
-    display: flex; gap: 10px; align-items: center;
-    padding: 7px; border-radius: 10px; cursor: pointer;
-    border: 1px solid transparent; user-select: none;
-  }
-  .side-item:hover { background: #f8fafc; }
-  .side-item.active { background: #eff6ff; border-color: #bfdbfe; }
-  .side-thumb {
-    width: 42px; height: 42px; flex: 0 0 42px; border-radius: 7px;
-    border: 1px solid var(--line); background: #fff;
-    object-fit: cover; display: block;
-  }
-  .side-thumb.ov {
-    display: grid; place-items: center; font-size: 1.1rem; color: #94a3b8;
-    background: #f8fafc;
-  }
-  .side-meta { min-width: 0; flex: 1; }
-  .side-remove { flex: 0 0 auto; padding: 4px 6px; font-size: .7rem; }
-  .banner-section { display: grid; gap: 14px; max-width: 850px; }
-  .banner-section h2, .banner-section h3, .banner-section p { margin: 0; }
-  .banner-section canvas { display: block; max-width: 100%; height: auto; border-radius: 8px; }
-  .banner-section .banner-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .comparison-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-  .comparison-result { font-size: .78rem; overflow-wrap: anywhere; }
-  .comparison-result.match { color: var(--green); }
-  .comparison-result.no_match { color: var(--red); }
-  .side-name {
-    font-size: .8rem; font-weight: 600;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .side-sub { font-size: .68rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .side-sub .ok { color: var(--green); }
-  .side-foot { padding: 9px 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
-  .side-foot button { width: 100%; }
-
-  .main { flex: 1; min-width: 0; overflow: auto; padding: 20px; }
-
-  /* ---------- cabeçalho da imagem ---------- */
-  .view-head { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
-  .view-head h1 { font-size: 1.12rem; margin: 0 0 3px; word-break: break-word; }
-  .view-title { display: flex; align-items: center; gap: 6px; }
-  .sub { font-size: .79rem; color: var(--muted); }
-  .view-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
-
-  /* ---------- abas ---------- */
-  .tabs { display: flex; gap: 3px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
-  .tabs button {
-    border: 0; background: transparent; padding: 9px 15px;
-    border-radius: 8px 8px 0 0; border-bottom: 2px solid transparent;
-    color: var(--muted); font-weight: 600; font-size: .84rem;
-  }
-  .tabs button:hover { background: #f8fafc; }
-  .tabs button.active { color: var(--blue); border-bottom-color: var(--blue); background: #eff6ff66; }
-  .tab-count { font-size: .7rem; opacity: .8; }
-
-  /* ---------- mapa ---------- */
-  .map-toolbar {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    margin-bottom: 10px; font-size: .78rem; color: var(--muted);
-  }
-  .map-toolbar button { padding: 4px 10px; font-size: .8rem; }
-  .zoom-label { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; color: var(--txt); }
-  .map-hint { margin-left: auto; }
-  .map-wrap {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: var(--radius); overflow: auto;
-    max-height: calc(100vh - 260px); cursor: grab;
-  }
-  .map-wrap.grabbing { cursor: grabbing; }
-  .map-canvas { display: block; width: 100%; height: auto; }
-
-  /* ---------- grade de células ---------- */
-  .cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
-  .cell {
-    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
-    background: var(--panel); display: flex; flex-direction: column;
-    transition: border-color .12s, box-shadow .12s;
-  }
-  .cell.marcada { border-color: var(--green); box-shadow: 0 0 0 2px #05966922; }
-  .cell.descartada { opacity: .55; }
-  .cell.selected { border-color: var(--blue); box-shadow: 0 0 0 2px #2563eb33; }
-  .thumb { position: relative; background: #fff; cursor: zoom-in; }
-  .thumb canvas { display: block; width: 100%; height: auto; }
-  .num {
-    position: absolute; top: 7px; left: 7px;
-    background: var(--red); color: #fff; font-weight: 700; font-size: .88rem;
-    line-height: 1; padding: 6px 9px; border-radius: 7px;
-    box-shadow: 0 1px 4px #0003;
-  }
-  .loc {
-    position: absolute; top: 7px; right: 7px;
-    background: #111827cc; color: #fff; font-size: .64rem;
-    padding: 4px 7px; border-radius: 6px;
-  }
-  .meta { padding: 9px 10px 11px; display: flex; flex-direction: column; gap: 7px; }
-
-  /* ---------- descrições automáticas (Ollama) ---------- */
-  .desc-toolbar {
-    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-    margin-bottom: 12px; padding: 10px 11px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  }
-  .desc-toolbar button { padding: 5px 11px; }
-  .desc-progress { font-size: .78rem; color: var(--muted); }
-  .desc-progress b { color: var(--txt); font-variant-numeric: tabular-nums; }
-  .desc-model { font-size: .7rem; color: var(--muted); }
-  .desc-model code { font-size: .7rem; background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
-  .desc-alert {
-    flex-basis: 100%; font-size: .76rem; line-height: 1.4;
-    padding: 7px 9px; border-radius: 7px;
-    background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;
-    white-space: pre-wrap; word-break: break-word;
-  }
-  .desc-alert.info { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
-  .desc-box {
-    display: flex; flex-direction: column; gap: 3px;
-    border-top: 1px dashed var(--line); padding-top: 7px; margin-top: 1px;
-  }
-  .desc-label {
-    font-size: .63rem; font-weight: 700; letter-spacing: .05em;
-    text-transform: uppercase; color: var(--muted);
-  }
-  .desc-text { font-size: .78rem; line-height: 1.35; word-break: break-word; }
-  .desc-text.empty { color: var(--muted); font-style: italic; }
-  .desc-text.running { color: var(--blue); }
-  .desc-text.error { color: var(--red); }
-  .desc-retry { align-self: flex-start; padding: 3px 8px; font-size: .72rem; margin-top: 2px; }
-  .drawer-desc { display: flex; flex-direction: column; gap: 7px; }
-  .drawer-desc .desc-box { border-top: 0; padding-top: 0; margin-top: 0; }
-
-  /* ---------- tabela de marcações ---------- */
-  .filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
-  .chip {
-    border: 1px solid var(--line); background: var(--panel);
-    padding: 5px 12px; border-radius: 999px; font-size: .78rem; cursor: pointer;
-    color: var(--muted);
-  }
-  .chip:hover { border-color: #c7ccd3; }
-  .chip.active { background: #111827; border-color: #111827; color: #fff; }
-  .chip .n { opacity: .7; margin-left: 3px; }
-  .search { flex: 1; min-width: 160px; max-width: 320px; margin-left: auto; }
-  .table-wrap {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: var(--radius); overflow: auto;
-    max-height: calc(100vh - 300px);
-  }
-  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
-  thead th {
-    position: sticky; top: 0; z-index: 1; background: #f9fafb;
-    text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
-    font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
-    font-weight: 600;
-  }
-  tbody td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover td { background: #f8fafc; }
-  tbody tr.selected td { background: #eff6ff; }
-  tbody td.n { font-weight: 700; width: 46px; }
-  tbody td.loc { color: var(--muted); width: 90px; white-space: nowrap; }
-  tbody td.st { width: 130px; }
-  tbody td.nt { min-width: 180px; }
-  tbody td.st select, tbody td.nt input { padding: 4px 7px; font-size: .78rem; }
-
-  /* ---------- visão geral ---------- */
-  .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-  .ov-card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: var(--radius); overflow: hidden; cursor: pointer;
-    transition: border-color .12s, box-shadow .12s;
-  }
-  .ov-card:hover { border-color: #bfdbfe; box-shadow: 0 4px 16px #0000000d; }
-  .ov-card canvas { display: block; width: 100%; height: auto; background: #fff; }
-  .ov-body { padding: 10px 12px 12px; }
-  .ov-name { font-size: .84rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ov-stats { display: flex; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
-  .stat { font-size: .67rem; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #475569; }
-  .stat.g { background: #ecfdf5; color: #047857; }
-  .stat.r { background: #fef2f2; color: #b91c1c; }
-  .ov-warn { font-size: .7rem; color: var(--amber); margin-top: 6px; }
-
-  /* ---------- estado vazio ---------- */
-  .empty { max-width: 640px; margin: 6vh auto; text-align: center; }
-  .empty-icon { font-size: 2.6rem; color: #cbd5e1; }
-  .empty h2 { font-size: 1.25rem; margin: 10px 0 6px; }
-  .empty p { color: var(--muted); font-size: .88rem; margin: 0 0 18px; }
-  .dropzone {
-    border: 2px dashed #cbd5e1; border-radius: 16px;
-    background: var(--panel); padding: 38px 20px; cursor: pointer;
-    transition: border-color .15s, background .15s;
-  }
-  .dropzone:hover { border-color: var(--blue); background: #eff6ff; }
-  .dropzone strong { font-size: 1rem; }
-  .dropzone span { color: var(--muted); font-size: .84rem; }
-
-  /* ---------- gaveta de detalhe ---------- */
-  .drawer {
-    position: fixed; top: 58px; right: 0; bottom: 0; width: 380px; max-width: 100%;
-    background: var(--panel); border-left: 1px solid var(--line);
-    box-shadow: -10px 0 30px #00000014; z-index: 35;
-    display: flex; flex-direction: column;
-    transform: translateX(102%); transition: transform .18s ease;
-  }
-  .drawer.open { transform: none; }
-  .drawer-head {
-    display: flex; align-items: center; gap: 10px;
-    padding: 11px 12px; border-bottom: 1px solid var(--line);
-  }
-  .drawer-num {
-    background: var(--red); color: #fff; font-weight: 700;
-    padding: 6px 10px; border-radius: 8px; font-size: .95rem; line-height: 1;
-  }
-  .drawer-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .drawer-title strong { font-size: .9rem; }
-  .drawer-title span { font-size: .72rem; color: var(--muted); }
-  .drawer-body { overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 11px; }
-  .drawer-img canvas { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
-  .drawer-name {
-    font-size: .72rem; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .field { display: flex; flex-direction: column; gap: 5px; font-size: .76rem; color: var(--muted); }
-  .drawer-nav { display: flex; gap: 6px; }
-  .drawer-nav button { flex: 1; }
-  .drawer-foot { margin-top: auto; }
-
-  /* ---------- modal de ajustes ---------- */
-  .modal-back {
-    position: fixed; inset: 0; background: #00000055; z-index: 50;
-    display: none; align-items: flex-start; justify-content: center;
-    padding: 70px 16px 16px;
-  }
-  .modal-back.open { display: flex; }
-  .modal {
-    background: var(--panel); border-radius: 14px; width: min(500px, 100%);
-    padding: 18px; box-shadow: 0 24px 70px #0003;
-    display: flex; flex-direction: column; gap: 13px;
-    max-height: calc(100vh - 90px); overflow: auto;
-  }
-  .modal-head { display: flex; align-items: center; justify-content: space-between; }
-  .modal-head h2 { margin: 0; font-size: 1rem; }
-  .modal-actions { display: flex; flex-wrap: wrap; gap: 7px; border-top: 1px solid var(--line); padding-top: 13px; }
-  .modal-foot { display: flex; justify-content: flex-end; }
-  .range-row { display: flex; align-items: center; gap: 10px; }
-  .range-row input[type="range"] { flex: 1; accent-color: var(--blue); }
-  .range-row b { min-width: 3ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--txt); }
-
-  /* ---------- overlay de arrastar ---------- */
-  #dropOverlay {
-    position: fixed; inset: 0; z-index: 60; display: none;
-    background: #eff6ffee; border: 4px dashed #2563eb;
-    align-items: center; justify-content: center;
-    font-size: 1.2rem; font-weight: 700; color: var(--blue);
-  }
-  #dropOverlay.show { display: flex; }
-
-  /* ---------- toast ---------- */
-  #toast {
-    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px);
-    background: #111827; color: #fff; padding: 9px 16px; border-radius: 9px;
-    font-size: .82rem; opacity: 0; pointer-events: none;
-    transition: opacity .18s, transform .18s; z-index: 70; max-width: 90vw;
-  }
-  #toast.show { opacity: 1; transform: translate(-50%, 0); }
-
-  /* ---------- responsivo ---------- */
-  @media (max-width: 880px) {
-    body { overflow: auto; }
-    .shell { flex-direction: column; height: auto; }
-    .sidebar {
-      width: 100%; flex: none; border-right: 0; border-bottom: 1px solid var(--line);
-      max-height: 150px;
-    }
-    .side-head { padding-bottom: 4px; }
-    .side-list { flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 6px; }
-    .side-item { flex: 0 0 auto; width: 190px; }
-    .side-foot { flex-direction: row; }
-    .main { overflow: visible; padding: 14px; }
-    .map-wrap { max-height: 62vh; }
-    .table-wrap { max-height: none; }
-    .drawer { top: 0; width: 100%; max-width: 430px; }
-    .view-actions { margin-left: 0; width: 100%; }
-  }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f4f6fa; color: #172033; font: 16px system-ui, sans-serif; }
+main { max-width: 680px; margin: 8vh auto; padding: 32px; background: #fff; border: 1px solid #e1e5ed; border-radius: 18px; }
+h1 { font-size: 28px; margin: 0 0 12px; }
+p { line-height: 1.6; color: #526078; }
+label { display: block; font-weight: 600; margin: 26px 0 10px; }
+input { width: 100%; padding: 14px; border: 1px solid #cad2df; border-radius: 9px; }
+button { width: 100%; padding: 15px; margin-top: 22px; background: #2563eb; border: 0; border-radius: 9px; color: white; font: 600 17px system-ui; cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+li { margin: 12px 0; overflow-wrap: anywhere; line-height: 1.5; }
+#status { min-height: 24px; }
+.error { color: #b42318; }
+.instruction { background: #eef4ff; padding: 15px; border-radius: 9px; color: #1e3a70; }
+.fluxo { margin-top: 28px; padding: 18px; border: 1px solid #dbe3ef; border-radius: 12px; background: #f8fafc; }
+.fluxo h2 { font-size: 18px; margin: 0 0 12px; }
+.passos { margin: 0; padding-left: 22px; color: #526078; }
+.passos li { margin: 6px 0; }
+.passos li.ativo { color: #1d4ed8; font-weight: 600; }
+.passos li.feito { color: #15803d; }
+.passos li.falhou { color: #b42318; }
+#fluxo-status { margin: 12px 0 0; }
+#resposta { margin: 14px 0 0; padding: 14px; background: #fff; border: 1px solid #dbe3ef; border-radius: 9px; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.acoes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.acoes button { width: auto; flex: 1 1 180px; margin-top: 0; }
+.nota { font-size: 14px; color: #667085; }
+@media (max-width: 720px) { main { margin: 20px 12px; padding: 24px; } }
 </style>
 </head>
 <body>
+<main>
+<h1>PDF numerado → resposta do DeepSeek</h1>
+<p>Escolha as imagens com o retângulo do cabeçalho e a grade.
+O PDF terá o cabeçalho original e os recortes numerados. Depois de gerar,
+ele vai sozinho para o DeepSeek e a resposta é salva em <strong>TXT</strong>.</p>
+<p class="instruction">Responda apenas com o número correspondente à imagem.<br><em>Sua resposta deve conter apenas dígitos e vírgulas.</em></p>
+<label for="files">Selecionar imagens</label>
+<input id="files" type="file" accept="image/*" multiple>
+<ul id="list"></ul>
+<button id="generate" disabled>Gerar PDF e enviar ao DeepSeek</button>
+<p id="status" role="status" aria-live="polite"></p>
 
-<header class="appbar">
-  <div class="brand"><span class="logo">▦</span> Numerador de Matriz</div>
-  <div class="spacer"></div>
-  <span class="app-status" id="appStatus"></span>
-  <button id="addBtn" class="primary">＋ Adicionar imagens</button>
-  <button id="settingsBtn" class="icon-btn" title="Ajustes">⚙</button>
-</header>
-
-<div class="shell">
-  <aside class="sidebar">
-    <div class="side-head"><span>Imagens</span><span id="sideCount"></span></div>
-    <div class="side-list" id="sideList"></div>
-    <div class="side-foot">
-      <button id="csvBtn">Baixar marcações (CSV)</button>
-    </div>
-  </aside>
-
-  <main class="main" id="main">
-    <div class="empty"><div class="empty-icon">▦</div><p>Carregando…</p></div>
-  </main>
-</div>
-
-<div class="drawer" id="drawer"></div>
-
-<div class="modal-back" id="settingsModal">
-  <div class="modal">
-    <div class="modal-head">
-      <h2>Ajustes</h2>
-      <button class="icon-btn" id="settingsClose" title="Fechar">✕</button>
-    </div>
-    <label class="field">
-      <span>Branco a partir de</span>
-      <div class="range-row">
-        <input type="range" id="thr" min="230" max="252" value="244">
-        <b id="thrVal">244</b>
-      </div>
-    </label>
-    <label class="field">
-      <span>Vão mínimo entre células (px)</span>
-      <input type="number" id="gap" min="2" max="40" value="5">
-    </label>
-    <p class="tiny">Mexa nisso só se a grade não for detectada corretamente. Depois use “Reprocessar”.</p>
-    <label class="field">
-      <span>Modelo de visão (Ollama)</span>
-      <input type="text" id="visionModel" value="moondream" spellcheck="false" autocomplete="off">
-    </label>
-    <p class="tiny">Usado em “Descrever células”. Deixe o Ollama aberto e baixe o modelo com <b>ollama pull moondream</b>. Para máquinas com pouca memória, prefira um modelo pequeno, como moondream (1,7 GB) ou gemma3:4b.</p>
-    <div class="modal-actions">
-      <button id="reprocessAll">Reprocessar todas</button>
-      <button id="exportAllCsv">Baixar marcações (CSV)</button>
-      <button id="clearMarks" class="danger">Limpar marcações</button>
-    </div>
-    <div class="modal-foot"><button class="primary" id="settingsDone">Concluir</button></div>
+<section id="fluxo" class="fluxo" hidden>
+  <h2>Fluxo automático</h2>
+  <ol class="passos">
+    <li id="passo-pdf">PDF gerado</li>
+    <li id="passo-envio">Enviando ao DeepSeek</li>
+    <li id="passo-resposta">Resposta salva em TXT</li>
+  </ol>
+  <p id="fluxo-status"></p>
+  <pre id="resposta" hidden></pre>
+  <div class="acoes" id="acoes" hidden>
+    <button id="copiar" type="button">Copiar resposta</button>
+    <button id="pasta" type="button">Abrir pasta da resposta</button>
   </div>
-</div>
+</section>
 
-<div id="dropOverlay">Solte as imagens aqui</div>
-<div id="toast"></div>
-<input type="file" id="fileInput" accept="image/*" multiple hidden>
-
+<p class="nota">Ao gerar um novo PDF, o PDF e a resposta anteriores são apagados quando a nova resposta chegar.
+Abra pelo atalho do programa para o fluxo funcionar. Suas imagens ficam no computador.</p>
+</main>
 <script>
 "use strict";
-
-/* ================================================================== */
-/* Estado                                                             */
-/* ================================================================== */
-const MARKS_KEY = "numerador-matriz-marcas-v1";
-const SET_KEY = "numerador-matriz-ajustes-v1";
-const DESC_KEY = "numerador-matriz-descricoes-v1";
-const DB_NAME = "numerador-matriz";
-const DB_STORE = "images";
-const DEFAULT_VISION_MODEL = "moondream";
-const VISION_TIMEOUT_MS = 135000;
-const DESC_PROMPT = "Descreva o assunto principal em uma frase simples e curta, em português do Brasil. Diga o que é e a ação ou o lugar visível. Preserve cor, quantidade ou posição se ajudarem a identificar o assunto. Não liste objetos secundários nem invente detalhes. Se houver dúvida, use 'parece'. Responda apenas com a legenda, de preferência em até 12 palavras.";
-const MOONDREAM_PROMPT = "Describe the main subject and its visible action or location in one short sentence, preferably under 12 words. Keep clear identifying details such as color, count or pose. Do not list secondary objects or invent details.";
-
-/* Lê um JSON do localStorage; devolve null se faltar, estiver inválido ou o acesso falhar. */
-function readJson(key) {
-  try { return JSON.parse(localStorage.getItem(key) || "{}"); } catch (e) { return null; }
-}
-/* Grava um JSON no localStorage; se falhar, avisa com failMessage (quando houver). */
-function writeJson(key, value, failMessage) {
-  try { localStorage.setItem(key, JSON.stringify(value)); }
-  catch (e) { if (failMessage) toast(failMessage); }
-}
-
-let marks = readJson(MARKS_KEY) || {};
-
-let descriptions = {};
-const savedDescriptions = readJson(DESC_KEY);
-if (savedDescriptions && typeof savedDescriptions === "object" && !Array.isArray(savedDescriptions)) {
-  descriptions = savedDescriptions;
-}
-
-function loadSettings() {
-  const loaded = {
-    whiteThr: 244, gapMin: 5, visionModel: DEFAULT_VISION_MODEL,
-    ...(readJson(SET_KEY) || {})
-  };
-  if (typeof loaded.visionModel !== "string" || !loaded.visionModel.trim()) {
-    loaded.visionModel = DEFAULT_VISION_MODEL;
-  }
-  loaded.visionModel = loaded.visionModel.trim().slice(0, 80);
-  return loaded;
-}
-function saveSettings() { writeJson(SET_KEY, state.settings); }
-function saveMarks() { writeJson(MARKS_KEY, marks, "Não foi possível salvar as marcações neste navegador."); }
-function keyOf(id, n) { return id + "::" + n; }
-function getMark(id, n) { return marks[keyOf(id, n)] || { status: "pendente", nota: "" }; }
-function setMark(id, n, patch) { marks[keyOf(id, n)] = { ...getMark(id, n), ...patch }; saveMarks(); }
-
-function saveDescriptions() { writeJson(DESC_KEY, descriptions, "Não foi possível salvar as descrições neste navegador."); }
-function cellGeometry(rec, cell) {
-  return `${rec.img.naturalWidth}x${rec.img.naturalHeight}|${cell.x},${cell.y},${cell.w},${cell.h}`;
-}
-// A descrição só vale enquanto o recorte tiver exatamente os mesmos limites.
-function getDescription(rec, cell) {
-  const byCell = descriptions[rec.id];
-  const d = byCell && byCell[cell.n];
-  if (!d || !d.texto || d.geo !== cellGeometry(rec, cell)) return null;
-  return d;
-}
-function setDescription(rec, cell, texto, modelo) {
-  if (!descriptions[rec.id]) descriptions[rec.id] = {};
-  descriptions[rec.id][cell.n] = {
-    texto: texto,
-    geo: cellGeometry(rec, cell),
-    modelo: modelo,
-    em: Date.now()
-  };
-  saveDescriptions();
-  if (rec.comparison) {
-    rec.comparison = null;
-    refreshComparison(rec);
-  }
-}
-function purgeInvalidDescriptions(rec) {
-  const byCell = descriptions[rec.id];
-  if (!byCell) return;
-  if (!rec.res || !Array.isArray(rec.res.cells)) return;
-  const valid = {};
-  for (const cell of [...rec.res.cells, rec.res.banner, rec.res.banner?.image].filter(Boolean)) {
-    const d = byCell[cell.n];
-    if (d && d.texto && d.geo === cellGeometry(rec, cell)) valid[cell.n] = d;
-  }
-  if (Object.keys(valid).length) descriptions[rec.id] = valid;
-  else delete descriptions[rec.id];
-  saveDescriptions();
-}
-function deleteDescriptionsFor(id) {
-  if (descriptions[id]) { delete descriptions[id]; saveDescriptions(); }
-}
-function countDescriptions(rec) {
-  if (!rec.res || !rec.res.cells) return 0;
-  return rec.res.cells.reduce((sum, cell) => sum + (getDescription(rec, cell) ? 1 : 0), 0);
-}
-
-const state = {
-  images: new Map(),   // id -> { id, name, blob, img, res, addedAt, ... }
-  activeId: null,
-  tab: "map",
-  zoom: 1,
-  filter: "todas",
-  search: "",
-  selected: null,      // { id, n }
-  settings: loadSettings(),
-  ui: {}               // referências da tela atual
-};
-
-// Estado do recurso opcional "Descrever células".
-const descRuntime = new Map();  // "id::n" -> { status: "running"|"error", message }
-const descNotices = new Map();  // id -> { code, message }
-let activeDescJob = null;       // só um lote/requisição por vez
-let activeComparison = false;
-const pendingDescriptions = new Set();
-
-/* ================================================================== */
-/* Utilidades                                                         */
-/* ================================================================== */
-const $ = (s, r = document) => r.querySelector(s);
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const tick = () => new Promise(r => setTimeout(r, 0));
-
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
-}
-function baseName(name) {
-  return (name || "imagem").replace(/\.[^.]+$/, "").replace(/[^\w\-À-ÿ]+/g, "_").slice(0, 60) || "imagem";
-}
-function pad2(n) { return String(n).padStart(2, "0"); }
-
-let toastTimer = null;
-function toast(msg) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2800);
-}
-function setBusy(msg) { $("#appStatus").textContent = msg || ""; }
-
-function download(name, blob) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-}
-function downloadText(name, text, type) {
-  download(name, new Blob([text], { type: type || "text/plain;charset=utf-8" }));
-}
-function loadImageBlob(blob) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("imagem inválida")); };
-    img.src = url;
-  });
-}
-function toBlob(canvas, type = "image/png") {
-  return new Promise(res => canvas.toBlob(res, type));
-}
-
-/* ================================================================== */
-/* IndexedDB — guarda as imagens para sobreviver ao recarregar        */
-/* ================================================================== */
-let _db = null;
-function openDB() {
-  if (_db) return Promise.resolve(_db);
-  return new Promise((resolve, reject) => {
-    let req;
-    try { req = indexedDB.open(DB_NAME, 1); }
-    catch (e) { return reject(e); }
-    req.onupgradeneeded = () => {
-      const d = req.result;
-      if (!d.objectStoreNames.contains(DB_STORE)) d.createObjectStore(DB_STORE, { keyPath: "id" });
-    };
-    req.onsuccess = () => { _db = req.result; resolve(_db); };
-    req.onerror = () => reject(req.error);
-  });
-}
-async function idbAll() {
-  try {
-    const d = await openDB();
-    return await new Promise((resolve, reject) => {
-      const q = d.transaction(DB_STORE).objectStore(DB_STORE).getAll();
-      q.onsuccess = () => resolve(q.result || []);
-      q.onerror = () => reject(q.error);
-    });
-  } catch (e) { return []; }
-}
-async function idbPut(rec) {
-  try {
-    const d = await openDB();
-    return await new Promise((resolve, reject) => {
-      const tx = d.transaction(DB_STORE, "readwrite");
-      tx.objectStore(DB_STORE).put(rec);
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (e) { return false; }
-}
-async function idbDelete(id) {
-  try {
-    const d = await openDB();
-    return await new Promise((resolve, reject) => {
-      const tx = d.transaction(DB_STORE, "readwrite");
-      tx.objectStore(DB_STORE).delete(id);
-      tx.oncomplete = () => resolve(true);
-      tx.onabort = () => reject(tx.error);
-    });
-  } catch (e) { return false; }
-}
-
-/* ================================================================== */
-/* Detecção automática da grade                                       */
-/* ================================================================== */
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 function runs(arr, thr, minLen) {
   const out = []; let s = -1;
   for (let i = 0; i < arr.length; i++) {
@@ -903,1858 +317,328 @@ function analyze(img, opt) {
   };
 }
 
-/* ================================================================== */
-/* Desenho                                                            */
-/* ================================================================== */
-function roundRect(ctx, x, y, w, h, r) {
-  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return; }
-  r = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-function badge(ctx, x, y, text, fontPx, fill) {
-  const padX = fontPx * 0.42, padY = fontPx * 0.24;
-  ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
-  const tw = ctx.measureText(text).width;
-  const w = tw + padX * 2, h = fontPx * 1.18 + padY * 2;
-  roundRect(ctx, x, y, w, h, Math.max(4, fontPx * 0.28));
-  ctx.fillStyle = fill; ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.textBaseline = "top";
-  ctx.fillText(text, x + padX, y + padY + fontPx * 0.08);
-  return { w, h };
-}
 
-function drawAnnotated(canvas, rec, maxDim, selectedN) {
-  const img = rec.img;
-  const W = img.naturalWidth, H = img.naturalHeight;
-  const s = Math.min(1, maxDim / Math.max(W, H));
-  canvas.width = Math.max(1, Math.round(W * s));
-  canvas.height = Math.max(1, Math.round(H * s));
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+const records = [];
+const filesInput = document.getElementById("files");
+const generateButton = document.getElementById("generate");
+const statusNode = document.getElementById("status");
 
-  const res = rec.res;
-  if (!res || !res.cells) return s;
-
-  const line = Math.max(2, canvas.width * 0.0035);
-  const fNum = Math.max(12, Math.min(46, Math.round(canvas.width * 0.05)));
-  const fLoc = Math.max(9, Math.min(22, Math.round(canvas.width * 0.018)));
-  const pad = Math.max(4, Math.round(canvas.width * 0.008));
-
-  for (const cell of res.cells) {
-    const x = cell.x * s, y = cell.y * s, w = cell.w * s, h = cell.h * s;
-    const isSel = selectedN && cell.n === selectedN;
-    if (isSel) {
-      ctx.fillStyle = "rgba(37,99,235,0.18)";
-      ctx.fillRect(x, y, w, h);
-    }
-    ctx.strokeStyle = isSel ? "#2563eb" : "#dc2626";
-    ctx.lineWidth = isSel ? line * 2 : line;
-    ctx.strokeRect(x, y, w, h);
-    badge(ctx, x + pad, y + pad, String(cell.n), fNum, isSel ? "#2563eb" : "#dc2626");
-    const loc = `L${cell.linha} C${cell.coluna}`;
-    ctx.font = `700 ${fLoc}px system-ui, sans-serif`;
-    const tw = ctx.measureText(loc).width;
-    const bh = fLoc * 1.5;
-    roundRect(ctx, x + pad, y + h - bh - pad, tw + fLoc * 0.9, bh, Math.max(3, fLoc * 0.25));
-    ctx.fillStyle = "#111827";
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.textBaseline = "middle";
-    ctx.fillText(loc, x + pad + fLoc * 0.45, y + h - bh / 2 - pad);
-  }
-  return s;
-}
-
-function makeThumb(img, cell, maxW = 520) {
-  const scale = Math.min(1, maxW / cell.w);
-  const c = document.createElement("canvas");
-  c.width = Math.max(1, Math.round(cell.w * scale));
-  c.height = Math.max(1, Math.round(cell.h * scale));
-  c.getContext("2d").drawImage(img, cell.x, cell.y, cell.w, cell.h, 0, 0, c.width, c.height);
-  return c;
-}
-function makeCellCanvas(img, cell) {
-  const c = document.createElement("canvas");
-  c.width = cell.w; c.height = cell.h;
-  c.getContext("2d").drawImage(img, cell.x, cell.y, cell.w, cell.h, 0, 0, cell.w, cell.h);
-  return c;
-}
-function thumbURL(rec) {
-  if (rec._thumb) return rec._thumb;
-  const c = document.createElement("canvas");
-  if (rec.res && rec.res.cells && rec.res.cells.length) {
-    const t = makeThumb(rec.img, rec.res.cells[0], 120);
-    c.width = t.width; c.height = t.height;
-    c.getContext("2d").drawImage(t, 0, 0);
-  } else {
-    const s = Math.min(1, 120 / Math.max(rec.img.naturalWidth, rec.img.naturalHeight));
-    c.width = Math.round(rec.img.naturalWidth * s);
-    c.height = Math.round(rec.img.naturalHeight * s);
-    c.getContext("2d").drawImage(rec.img, 0, 0, c.width, c.height);
-  }
-  rec._thumb = c.toDataURL("image/png");
-  return rec._thumb;
-}
-
-/* ================================================================== */
-/* ZIP (store) — para baixar as células                               */
-/* ================================================================== */
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-function crc32(u8) {
-  let c = 0xFFFFFFFF;
-  for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
-  return (c ^ 0xFFFFFFFF) >>> 0;
-}
-function zipStore(files) {
-  const enc = new TextEncoder();
-  const chunks = [], central = [];
-  let offset = 0;
-
-  for (const f of files) {
-    const name = enc.encode(f.name);
-    const data = f.data;
-    const crc = crc32(data);
-
-    const lh = new DataView(new ArrayBuffer(30));
-    lh.setUint32(0, 0x04034b50, true);
-    lh.setUint16(4, 20, true);
-    lh.setUint16(6, 0x0800, true);
-    lh.setUint16(8, 0, true);
-    lh.setUint16(10, 0, true);
-    lh.setUint16(12, 0, true);
-    lh.setUint32(14, crc, true);
-    lh.setUint32(18, data.length, true);
-    lh.setUint32(22, data.length, true);
-    lh.setUint16(26, name.length, true);
-    lh.setUint16(28, 0, true);
-    chunks.push(new Uint8Array(lh.buffer), name, data);
-
-    const ch = new DataView(new ArrayBuffer(46));
-    ch.setUint32(0, 0x02014b50, true);
-    ch.setUint16(4, 20, true);
-    ch.setUint16(6, 20, true);
-    ch.setUint16(8, 0x0800, true);
-    ch.setUint16(10, 0, true);
-    ch.setUint16(12, 0, true);
-    ch.setUint16(14, 0, true);
-    ch.setUint32(16, crc, true);
-    ch.setUint32(20, data.length, true);
-    ch.setUint32(24, data.length, true);
-    ch.setUint16(28, name.length, true);
-    ch.setUint16(30, 0, true);
-    ch.setUint16(32, 0, true);
-    ch.setUint16(34, 0, true);
-    ch.setUint16(36, 0, true);
-    ch.setUint32(38, 0, true);
-    ch.setUint32(42, offset, true);
-    central.push(new Uint8Array(ch.buffer), name);
-
-    offset += 30 + name.length + data.length;
-  }
-
-  const cdSize = central.reduce((a, b) => a + b.length, 0);
-  const eocd = new DataView(new ArrayBuffer(22));
-  eocd.setUint32(0, 0x06054b50, true);
-  eocd.setUint16(4, 0, true);
-  eocd.setUint16(6, 0, true);
-  eocd.setUint16(8, files.length, true);
-  eocd.setUint16(10, files.length, true);
-  eocd.setUint32(12, cdSize, true);
-  eocd.setUint32(16, offset, true);
-  eocd.setUint16(20, 0, true);
-
-  return new Blob([...chunks, ...central, new Uint8Array(eocd.buffer)], { type: "application/zip" });
-}
-
-/* ================================================================== */
-/* Contadores e textos                                                */
-/* ================================================================== */
-function countsFor(id) {
-  const c = { total: 0, pendente: 0, marcada: 0, descartada: 0 };
-  const rec = state.images.get(id);
-  if (!rec || !rec.res || !rec.res.cells) return c;
-  c.total = rec.res.cells.length;
-  for (const cell of rec.res.cells) {
-    const s = getMark(id, cell.n).status || "pendente";
-    if (c[s] != null) c[s]++;
-  }
-  return c;
-}
-function subText(rec) {
-  if (!rec.res || rec.res.error) return "grade não detectada";
-  const c = countsFor(rec.id);
-  let t = `${rec.res.rows} × ${rec.res.cols} · ${c.total} células · ${c.marcada} marcada(s)`;
-  if (c.descartada) t += ` · ${c.descartada} descartada(s)`;
-  return t;
-}
-function csvForImage(rec) {
-  const rows = [["numero", "linha", "coluna", "status", "nota"]];
-  for (const cell of (rec.res.cells || [])) {
-    const m = getMark(rec.id, cell.n);
-    rows.push([cell.n, cell.linha, cell.coluna, m.status, m.nota || ""]);
-  }
-  return rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
-}
-
-/* ================================================================== */
-/* Sidebar                                                            */
-/* ================================================================== */
-function renderSidebar() {
-  const list = $("#sideList");
-  list.innerHTML = "";
-  $("#sideCount").textContent = state.images.size ? String(state.images.size) : "";
-
-  const ov = el("div", "side-item" + (state.activeId === null ? " active" : ""));
-  const ovThumb = el("div", "side-thumb ov", "▦");
-  const ovMeta = el("div", "side-meta");
-  ovMeta.append(el("div", "side-name", "Visão geral"),
-    el("div", "side-sub", `${state.images.size} imagem(ns)`));
-  ov.append(ovThumb, ovMeta);
-  ov.addEventListener("click", () => {
-    state.activeId = null;
-    state.selected = null;
-    closeDrawer();
-    renderSidebar();
-    renderMain();
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Não consegui abrir esta imagem.")); };
+    image.src = url;
   });
-  list.appendChild(ov);
-
-  for (const rec of state.images.values()) {
-    const item = el("div", "side-item" + (rec.id === state.activeId ? " active" : ""));
-    const img = el("img", "side-thumb");
-    img.src = thumbURL(rec);
-    img.alt = "";
-    const meta = el("div", "side-meta");
-    const name = el("div", "side-name", rec.name);
-    const c = countsFor(rec.id);
-    const sub = el("div", "side-sub");
-    if (rec.res && rec.res.error) sub.textContent = "grade não detectada";
-    else {
-      sub.innerHTML = `${c.total} células`;
-      if (c.marcada) {
-        const s = el("span", "ok", ` · ${c.marcada} ✓`);
-        sub.appendChild(s);
-      }
-    }
-    meta.append(name, sub);
-    const remove = el("button", "danger side-remove", "Apagar");
-    remove.setAttribute("aria-label", `Apagar ${rec.name}`);
-    remove.addEventListener("click", event => {
-      event.stopPropagation();
-      removeImage(rec);
-    });
-    item.append(img, meta, remove);
-    item.addEventListener("click", () => selectImage(rec.id));
-    list.appendChild(item);
-  }
 }
 
-function selectImage(id, tab = "map") {
-  state.activeId = id;
-  state.tab = tab;
-  state.zoom = 1;
-  state.selected = null;
-  closeDrawer();
-  renderSidebar();
-  renderMain();
-  $("#main").scrollTop = 0;
+function headerBox(image, result) {
+  if (result.banner) return result.banner;
+  const cells = result.cells;
+  const x = Math.min(...cells.map(cell => cell.x));
+  const right = Math.max(...cells.map(cell => cell.x + cell.w));
+  const top = Math.min(...cells.map(cell => cell.y));
+  if (top < 12) throw new Error("Inclua o retângulo do cabeçalho acima da grade na imagem.");
+  return { x, y: 0, w: right - x, h: top };
 }
 
-/* ================================================================== */
-/* Tela principal                                                     */
-/* ================================================================== */
-function renderMain() {
-  const main = $("#main");
-  main.innerHTML = "";
-  state.ui = {};
-
-  if (!state.images.size) { main.appendChild(emptyState()); return; }
-  if (state.activeId === null) { main.appendChild(overviewView()); return; }
-
-  const rec = state.images.get(state.activeId);
-  if (!rec) { state.activeId = null; renderMain(); return; }
-  main.appendChild(imageView(rec));
-  updateDescToolbar(rec);
+function fitImage(ctx, image, crop, x, y, width, height) {
+  const scale = Math.min(width / crop.w, height / crop.h);
+  const w = crop.w * scale, h = crop.h * scale;
+  ctx.drawImage(image, crop.x, crop.y, crop.w, crop.h,
+    x + (width - w) / 2, y + (height - h) / 2, w, h);
 }
 
-function emptyState() {
-  const wrap = el("div", "empty");
-  wrap.innerHTML = `
-    <div class="empty-icon">▦</div>
-    <h2>Arraste suas imagens aqui</h2>
-    <p>O programa encontra o banner e a grade, recorta cada célula, numera e deixa você navegar e marcar. Funciona com várias imagens de uma vez.</p>
-    <div class="dropzone" id="emptyDrop"><strong>Clique para escolher</strong><br><span>ou arraste os arquivos</span></div>
-    <p class="tiny" style="margin-top:16px">Tudo fica no seu computador — nenhuma imagem é enviada para a internet.</p>`;
-  wrap.querySelector("#emptyDrop").addEventListener("click", () => $("#fileInput").click());
-  return wrap;
-}
-
-function overviewView() {
-  const wrap = el("div", "overview");
-  const head = el("div", "view-head");
-  const title = el("div");
-  title.innerHTML = `<h1>Visão geral</h1><div class="sub">${state.images.size} imagem(ns) carregada(s)</div>`;
-  const actions = el("div", "view-actions");
-  const csv = el("button", null, "Baixar marcações (CSV)");
-  csv.addEventListener("click", exportAllCsv);
-  const add = el("button", "primary", "＋ Adicionar imagens");
-  add.addEventListener("click", () => $("#fileInput").click());
-  actions.append(csv, add);
-  head.append(title, actions);
-  wrap.appendChild(head);
-
-  const grid = el("div", "overview-grid");
-  for (const rec of state.images.values()) {
-    const c = countsFor(rec.id);
-    const card = el("div", "ov-card");
-    const cv = document.createElement("canvas");
-    if (rec.res && rec.res.cells && rec.res.cells.length) drawAnnotated(cv, rec, 620, null);
-    else {
-      const s = Math.min(1, 620 / Math.max(rec.img.naturalWidth, rec.img.naturalHeight));
-      cv.width = Math.round(rec.img.naturalWidth * s);
-      cv.height = Math.round(rec.img.naturalHeight * s);
-      cv.getContext("2d").drawImage(rec.img, 0, 0, cv.width, cv.height);
-    }
-    card.appendChild(cv);
-
-    const body = el("div", "ov-body");
-    body.appendChild(el("div", "ov-name", rec.name));
-    const stats = el("div", "ov-stats");
-    if (rec.res && rec.res.error) {
-      stats.appendChild(el("span", "stat r", "grade não detectada"));
-    } else {
-      stats.appendChild(el("span", "stat", `${c.total} células`));
-      stats.appendChild(el("span", "stat g", `${c.marcada} marcadas`));
-      if (c.descartada) stats.appendChild(el("span", "stat r", `${c.descartada} descartadas`));
-    }
-    body.appendChild(stats);
-    card.appendChild(body);
-    card.addEventListener("click", () => selectImage(rec.id));
-    grid.appendChild(card);
-  }
-  wrap.appendChild(grid);
-  return wrap;
-}
-
-function imageView(rec) {
-  const view = el("div", "view");
-
-  const ids = [...state.images.keys()];
-  const idx = ids.indexOf(rec.id);
-
-  const head = el("div", "view-head");
-  const title = el("div", "view-title");
-  const prev = el("button", "icon-btn", "‹");
-  prev.title = "Imagem anterior";
-  prev.disabled = idx <= 0;
-  prev.addEventListener("click", () => selectImage(ids[idx - 1]));
-  const next = el("button", "icon-btn", "›");
-  next.title = "Próxima imagem";
-  next.disabled = idx < 0 || idx >= ids.length - 1;
-  next.addEventListener("click", () => selectImage(ids[idx + 1]));
-  const titleBox = el("div");
-  titleBox.innerHTML = `<h1></h1><div class="sub" data-sub></div>`;
-  titleBox.querySelector("h1").textContent = rec.name;
-  titleBox.querySelector("[data-sub]").textContent = subText(rec);
-  title.append(prev, titleBox, next);
-
-  const actions = el("div", "view-actions");
-  const btnAnnot = el("button", null, "Baixar numerada");
-  const btnZip = el("button", null, "Baixar .zip");
-  const btnRe = el("button", null, "Reprocessar");
-  const btnRm = el("button", "danger", "Apagar");
-  actions.append(btnAnnot, btnZip, btnRe, btnRm);
-
-  head.append(title, actions);
-
-  btnAnnot.addEventListener("click", () => {
-    const c = document.createElement("canvas");
-    drawAnnotated(c, rec, 4000, null);
-    toBlob(c).then(b => download(baseName(rec.name) + "_numerada.png", b));
-  });
-
-  btnZip.addEventListener("click", async () => {
-    if (!rec.res || !rec.res.cells || !rec.res.cells.length) { toast("Nada para baixar nesta imagem."); return; }
-    btnZip.disabled = true; btnZip.textContent = "Gerando…";
-    try {
-      const files = [];
-      for (const cell of rec.res.cells) {
-        const c = makeCellCanvas(rec.img, cell);
-        const blob = await toBlob(c);
-        files.push({
-          name: `celulas/celula_${pad2(cell.n)}.png`,
-          data: new Uint8Array(await blob.arrayBuffer())
-        });
-      }
-      files.push({ name: "marcacoes.csv", data: new TextEncoder().encode("\ufeff" + csvForImage(rec)) });
-      files.push({
-        name: "coordenadas.json",
-        data: new TextEncoder().encode(JSON.stringify({
-          origem: rec.name,
-          tamanho: { largura: rec.img.naturalWidth, altura: rec.img.naturalHeight },
-          linhas: rec.res.rows, colunas: rec.res.cols,
-          celulas: rec.res.cells.map(c => ({
-            numero: c.n, linha: c.linha, coluna: c.coluna,
-            x: c.x, y: c.y, largura: c.w, altura: c.h
-          }))
-        }, null, 2))
-      });
-      download(baseName(rec.name) + "_celulas.zip", zipStore(files));
-    } finally {
-      btnZip.disabled = false; btnZip.textContent = "Baixar .zip";
-    }
-  });
-
-  btnRe.addEventListener("click", () => reprocessImage(rec.id));
-
-  btnRm.addEventListener("click", () => removeImage(rec));
-
-  view.appendChild(head);
-
-  // abas
-  const tabs = el("div", "tabs");
-  const tabDefs = [["map", "Mapa"], ["cells", "Células"], ["banner", "Cabeçalho"], ["marks", "Marcações"]];
-  for (const [id, label] of tabDefs) {
-    const b = el("button", state.tab === id ? "active" : "", label);
-    b.dataset.tab = id;
-    if (id === "marks") {
-      const cnt = el("span", "tab-count", "");
-      cnt.dataset.markcount = "";
-      const c = countsFor(rec.id);
-      cnt.textContent = c.marcada ? `(${c.marcada})` : "";
-      b.appendChild(document.createTextNode(" "));
-      b.appendChild(cnt);
-    }
-    b.addEventListener("click", () => {
-      if (state.tab === id) return;
-      state.tab = id;
-      tabs.querySelectorAll("button").forEach(x => x.classList.toggle("active", x.dataset.tab === id));
-      renderTabBody(rec);
-    });
-    tabs.appendChild(b);
-  }
-  view.appendChild(tabs);
-
-  const body = el("div", "tab-body");
-  view.appendChild(body);
-  state.ui = { rec, body, tabs };
-  renderTabBody(rec);
-  return view;
-}
-
-function renderTabBody(rec) {
-  const body = state.ui.body;
-  if (!body) return;
-  body.innerHTML = "";
-  state.ui.canvas = null;
-  state.ui.mapWrap = null;
-  state.ui.renderMarksRows = null;
-  if (state.tab === "map") body.appendChild(mapPanel(rec));
-  else if (state.tab === "cells") {
-    body.appendChild(cellsPanel(rec));
-    updateDescToolbar(rec);
-  } else if (state.tab === "banner") {
-    body.appendChild(bannerPanel(rec));
-    if (rec.res?.banner && !rec.bannerOCR && !getDescription(rec, rec.res.banner)) readBanner(rec);
-  } else body.appendChild(marksPanel(rec));
-}
-
-/* ------------------------------- MAPA ----------------------------- */
-function mapPanel(rec) {
-  const panel = el("div", "panel-map");
-  if (!rec.res || !rec.res.cells || !rec.res.cells.length) {
-    panel.appendChild(errorBox(rec));
-    return panel;
-  }
-
-  const bar = el("div", "map-toolbar");
-  const out = el("button", null, "−");
-  const zin = el("button", null, "+");
-  const reset = el("button", null, "100%");
-  const fit = el("button", null, "Ajustar");
-  const zoomLabel = el("span", "zoom-label", "100%");
-  const hint = el("span", "map-hint", "role para dar zoom · arraste para mover · clique numa célula");
-  bar.append(out, zin, reset, fit, zoomLabel, hint);
-
-  const wrap = el("div", "map-wrap");
+function renderPdfPage(record, pageNumber, total) {
   const canvas = document.createElement("canvas");
-  canvas.className = "map-canvas";
-  const selN = state.selected && state.selected.id === rec.id ? state.selected.n : null;
-  drawAnnotated(canvas, rec, 2000, selN);
-  wrap.appendChild(canvas);
-  panel.append(bar, wrap);
-
-  state.ui.canvas = canvas;
-  state.ui.mapWrap = wrap;
-
-  function applyZoom() {
-    canvas.style.width = (state.zoom * 100) + "%";
-    canvas.style.margin = state.zoom < 1 ? "0 auto" : "0";
-    zoomLabel.textContent = Math.round(state.zoom * 100) + "%";
+  canvas.width = 1240; canvas.height = 1754;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#172033"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = "600 30px Arial, sans-serif";
+  ctx.fillText("Responda apenas com o número", 620, 52);
+  ctx.fillText("correspondente à imagem.", 620, 90);
+  ctx.font = "italic 26px Arial, sans-serif";
+  ctx.fillText("Sua resposta deve conter apenas dígitos e vírgulas.", 620, 132);
+  const margin = 64, width = canvas.width - margin * 2;
+  const header = record.header;
+  const headerHeight = Math.min(340, Math.max(100, width * header.h / header.w));
+  ctx.strokeStyle = "#9da8ba"; ctx.lineWidth = 2;
+  ctx.strokeRect(margin, 160, width, headerHeight);
+  fitImage(ctx, record.image, header, margin + 8, 168, width - 16, headerHeight - 16);
+  const startY = 160 + headerHeight + 32;
+  const gap = 18, rows = record.result.rows, cols = record.result.cols;
+  const cellWidth = (width - gap * (cols - 1)) / cols;
+  const availableHeight = (canvas.height - 90 - startY - gap * (rows - 1)) / rows;
+  const aspect = Math.max(...record.result.cells.map(cell => cell.h / cell.w));
+  const cellHeight = Math.min(availableHeight, (cellWidth - 10) * aspect + 48);
+  if (cellWidth < 45 || cellHeight < 65) throw new Error("A grade é grande demais para ficar legível em uma página.");
+  for (const cell of record.result.cells) {
+    const x = margin + (cell.coluna - 1) * (cellWidth + gap);
+    const y = startY + (cell.linha - 1) * (cellHeight + gap);
+    ctx.strokeStyle = "#d5dce7"; ctx.strokeRect(x, y, cellWidth, cellHeight);
+    fitImage(ctx, record.image, cell, x + 5, y + 5, cellWidth - 10, cellHeight - 48);
+    ctx.fillStyle = "#172033"; ctx.font = "700 30px Arial, sans-serif";
+    ctx.fillText(String(cell.n), x + cellWidth / 2, y + cellHeight - 22);
   }
-  function setZoom(z) { state.zoom = clamp(z, 0.25, 5); applyZoom(); }
-  applyZoom();
+  ctx.font = "20px Arial, sans-serif"; ctx.fillStyle = "#667085";
+  ctx.fillText("Página " + pageNumber + " de " + total, 620, 1714);
+  return canvas;
+}
 
-  out.addEventListener("click", () => setZoom(state.zoom / 1.25));
-  zin.addEventListener("click", () => setZoom(state.zoom * 1.25));
-  reset.addEventListener("click", () => setZoom(1));
-  fit.addEventListener("click", () => {
-    setZoom(1);
-    wrap.scrollTo({ top: 0, left: 0 });
+// PDF local: uma imagem JPEG por página, sem bibliotecas nem envio ao servidor.
+function makePdf(pages) {
+  if (!pages.length) throw new Error("Selecione pelo menos uma imagem.");
+  const encoder = new TextEncoder();
+  const chunks = [], offsets = [0];
+  let length = 0;
+  const push = value => {
+    const bytes = typeof value === "string" ? encoder.encode(value) : value;
+    chunks.push(bytes); length += bytes.length;
+  };
+  const object = (id, body) => {
+    offsets[id] = length; push(id + " 0 obj\n"); push(body); push("\nendobj\n");
+  };
+  push("%PDF-1.4\n%local-pdf\n");
+  object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  object(2, "<< /Type /Pages /Count " + pages.length + " /Kids [" +
+    pages.map((_, i) => (3 + i * 3) + " 0 R").join(" ") + "] >>");
+  pages.forEach((page, index) => {
+    const id = 3 + index * 3;
+    object(id, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im0 " +
+      (id + 1) + " 0 R >> >> /Contents " + (id + 2) + " 0 R >>");
+    offsets[id + 1] = length;
+    push((id + 1) + " 0 obj\n<< /Type /XObject /Subtype /Image /Width " + page.width +
+      " /Height " + page.height + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " +
+      page.jpeg.length + " >>\nstream\n");
+    push(page.jpeg); push("\nendstream\nendobj\n");
+    const commands = "q\n595.28 0 0 841.89 0 0 cm\n/Im0 Do\nQ\n";
+    object(id + 2, "<< /Length " + encoder.encode(commands).length + " >>\nstream\n" + commands + "endstream");
   });
-
-  wrap.addEventListener("wheel", e => {
-    e.preventDefault();
-    setZoom(state.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
-  }, { passive: false });
-
-  // arrastar para mover
-  let drag = null, suppressClick = false;
-  wrap.addEventListener("pointerdown", e => {
-    if (e.button !== 0) return;
-    drag = { x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop, moved: false };
-    suppressClick = false;
-    wrap.setPointerCapture(e.pointerId);
-    wrap.classList.add("grabbing");
-  });
-  wrap.addEventListener("pointermove", e => {
-    if (!drag) return;
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-    wrap.scrollLeft = drag.sl - dx;
-    wrap.scrollTop = drag.st - dy;
-  });
-  function endDrag() {
-    if (!drag) return;
-    suppressClick = drag.moved;
-    drag = null;
-    wrap.classList.remove("grabbing");
-  }
-  wrap.addEventListener("pointerup", endDrag);
-  wrap.addEventListener("pointercancel", endDrag);
-
-  canvas.addEventListener("click", e => {
-    if (suppressClick) { suppressClick = false; return; }
-    const rect = canvas.getBoundingClientRect();
-    const s = canvas.width / rec.img.naturalWidth;
-    const x = (e.clientX - rect.left) / rect.width * canvas.width / s;
-    const y = (e.clientY - rect.top) / rect.height * canvas.height / s;
-    const cell = rec.res.cells.find(c => x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h);
-    if (cell) openDrawer(rec.id, cell.n);
-    else closeDrawer();
-  });
-
-  return panel;
+  const xref = length, count = 3 + pages.length * 3;
+  push("xref\n0 " + count + "\n0000000000 65535 f \n");
+  for (let id = 1; id < count; id++) push(String(offsets[id]).padStart(10, "0") + " 00000 n \n");
+  push("trailer\n<< /Size " + count + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n");
+  return new Blob(chunks, { type: "application/pdf" });
 }
 
-function errorBox(rec) {
-  const box = el("div", "warn");
-  box.innerHTML = `Não encontrei a grade com os ajustes atuais. Abra <b>Ajustes</b> e mexa em <b>Branco a partir de</b> ou no <b>Vão mínimo</b>, depois clique em <b>Reprocessar</b>.`;
-  return box;
+const EXTENSION_ID = "hiochncjhkepocddhajcdlmideilidab";
+let timerFluxo = 0, textoResposta = "";
+
+function marcarPasso(id, classe) {
+  const node = document.getElementById(id);
+  node.className = classe || "";
 }
 
-/* --------------------- DESCRIÇÕES (OLLAMA) ------------------------ */
-function descError(code, message) {
-  const e = new Error(message);
-  e.code = code;
-  return e;
-}
-function descStatus(rec, cell) {
-  const rt = descRuntime.get(keyOf(rec.id, cell.n));
-  if (rt) return rt;
-  const d = getDescription(rec, cell);
-  if (d) return { status: "ok", texto: d.texto, modelo: d.modelo };
-  return { status: "empty" };
-}
-function buildDescBox(rec, cell, variant) {
-  const box = el("div", "desc-box");
-  box.dataset.desc = "1";
-  box.dataset.id = rec.id;
-  box.dataset.n = String(cell.n);
-  box.dataset.variant = variant || "card";
-  fillDescBox(box, rec, cell);
-  return box;
-}
-function fillDescBox(box, rec, cell) {
-  box.innerHTML = "";
-  const info = descStatus(rec, cell);
-  box.appendChild(el("div", "desc-label", "Descrição automática"));
-  if (info.status === "ok") {
-    box.appendChild(el("div", "desc-text", info.texto));
-  } else if (info.status === "running") {
-    box.appendChild(el("div", "desc-text running", "Analisando…"));
-  } else if (info.status === "error") {
-    box.appendChild(el("div", "desc-text error", info.message));
-    if (box.dataset.variant === "card") {
-      const retry = el("button", "desc-retry", "Tentar novamente");
-      retry.addEventListener("click", e => {
-        e.stopPropagation();
-        retryCellDescription(rec.id, cell.n);
+// Avisa a extensão na hora em que o PDF fica pronto, sem esperar o alarme.
+function avisarExtensao() {
+  try {
+    if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage(EXTENSION_ID, { type: "CHECK", base: location.origin }, () => {
+        void chrome.runtime.lastError;
       });
-      box.appendChild(retry);
     }
-  } else {
-    box.appendChild(el("div", "desc-text empty", "Ainda não descrita."));
+  } catch (error) {
+    // Extensão ausente: o alarme da extensão tenta de novo sozinho.
   }
 }
-function refreshDescriptionUI(id, n) {
-  const rec = state.images.get(id);
-  if (!rec || !rec.res || !rec.res.cells) return;
-  const cell = n === "banner-image" ? rec.res.banner?.image : rec.res.cells.find(c => c.n === n);
-  if (!cell) return;
-  document.querySelectorAll("[data-desc]").forEach(box => {
-    if (box.dataset.id === id && box.dataset.n === String(n)) fillDescBox(box, rec, cell);
-  });
-  if (state.selected && state.selected.id === id && state.selected.n === n) syncDrawerDescribe(rec, cell);
-  updateDescToolbars();
-}
-function syncDrawerDescribe(rec, cell) {
-  const btn = $("#drawerDescribe");
-  if (!btn) return;
-  const info = descStatus(rec, cell);
-  if (info.status === "running") {
-    btn.disabled = true;
-    btn.textContent = "Analisando…";
-  } else if (activeDescJob) {
-    btn.disabled = true;
-    btn.textContent = "Aguarde o lote…";
-  } else {
-    btn.disabled = false;
-    btn.textContent = info.status === "ok" ? "Descrever novamente"
-      : info.status === "error" ? "Tentar novamente" : "Descrever esta célula";
-  }
-}
-function toolbarFor(id) {
-  return [...document.querySelectorAll("[data-desc-toolbar]")].find(b => b.dataset.id === id) || null;
-}
-function updateDescToolbar(rec) {
-  const bar = toolbarFor(rec.id);
-  if (!bar) return;
-  const all = bar.querySelector("[data-desc-all]");
-  const progress = bar.querySelector("[data-desc-progress]");
-  const cancel = bar.querySelector("[data-desc-cancel]");
-  const alert = bar.querySelector("[data-desc-alert]");
-  const model = bar.querySelector("[data-vision-model]");
-  if (model) model.textContent = state.settings.visionModel || DEFAULT_VISION_MODEL;
 
-  const job = activeDescJob;
-  const queued = pendingDescriptions.has(rec.id);
-  if (job) {
-    const isThis = job.id === rec.id;
-    let text = job.checking ? "Verificando o Ollama…" : `${job.done} de ${job.total} recortes analisados`;
-    if (job.cancelled) text = "Cancelando…";
-    else if (!isThis) {
-      text += ` em “${job.name}”`;
-      if (queued) text += " · Esta imagem está na fila";
-    }
-    else if (job.current === "banner-image") text += " · imagem do cabeçalho em análise";
-    else if (job.current) text += ` · célula ${job.current} em análise`;
-    progress.textContent = text;
-    cancel.classList.remove("hidden");
-    cancel.textContent = isThis ? "Cancelar" : "Cancelar lote";
-    cancel.disabled = job.cancelled;
-    all.disabled = true;
-    all.title = "Há um lote em andamento.";
-  } else {
-    const total = (rec.res && rec.res.cells) ? rec.res.cells.length : 0;
-    const done = countDescriptions(rec);
-    progress.textContent = done
-      ? `${done} de ${total} células com descrição`
-      : "Nenhuma célula descrita ainda";
-    cancel.classList.add("hidden");
-    all.disabled = false;
-    all.title = "";
-  }
-
-  const notice = descNotices.get(rec.id);
-  if (location.protocol === "file:") {
-    alert.className = "desc-alert info";
-    alert.textContent = "Este app foi aberto direto do arquivo. As descrições precisam do servidor local: feche esta aba e abra pelo atalho abrir_separador.sh.";
-  } else if (notice) {
-    alert.className = "desc-alert";
-    alert.textContent = notice.message;
-  } else {
-    alert.className = "desc-alert hidden";
-    alert.textContent = "";
-  }
-}
-function updateDescToolbars() {
-  document.querySelectorAll("[data-desc-toolbar]").forEach(bar => {
-    const rec = state.images.get(bar.dataset.id);
-    if (rec) updateDescToolbar(rec);
-  });
-  if (state.selected) {
-    const rec = state.images.get(state.selected.id);
-    const cell = rec && rec.res && rec.res.cells
-      ? rec.res.cells.find(c => c.n === state.selected.n) : null;
-    if (cell) syncDrawerDescribe(rec, cell);
-  }
-}
-function descriptionToolbar(rec) {
-  const bar = el("div", "desc-toolbar");
-  bar.dataset.descToolbar = "1";
-  bar.dataset.id = rec.id;
-
-  const all = el("button", "primary", "Descrever células");
-  all.dataset.descAll = "1";
-  all.addEventListener("click", () => describeCells(rec, rec.res.cells.slice()));
-
-  const progress = el("span", "desc-progress");
-  progress.dataset.descProgress = "1";
-
-  const cancel = el("button", "danger hidden", "Cancelar");
-  cancel.dataset.descCancel = "1";
-  cancel.addEventListener("click", () => cancelDescriptionJob(null));
-
-  const model = el("span", "desc-model");
-  model.append(document.createTextNode("Ollama local · modelo "));
-  const modelCode = document.createElement("code");
-  modelCode.dataset.visionModel = "1";
-  model.appendChild(modelCode);
-
-  const alert = el("div", "desc-alert hidden");
-  alert.dataset.descAlert = "1";
-
-  bar.append(all, progress, cancel, model, alert);
-  return bar;
-}
-
-/* fetch + JSON. Se o pedido foi abortado, repropaga o erro; senão, JSON inválido vira data = null. */
-async function fetchJson(url, options, ctrl) {
-  const res = await fetch(url, { ...options, signal: ctrl.signal });
-  const data = await res.json().catch(error => {
-    if (ctrl.signal.aborted) throw error;
-    return null;
-  });
-  return { res, data };
-}
-
-async function checkVisionService(model, signal) {
-  if (location.protocol === "file:") {
-    return {
-      ok: false, code: "sem_servidor",
-      message: "Para descrever células, abra o app pelo atalho abrir_separador.sh. Ele inicia o servidor local que conversa com o Ollama."
-    };
-  }
-  const ctrl = new AbortController();
-  const abort = () => ctrl.abort();
-  signal.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(abort, 8000);
-  let data;
+// Abrir a página com ?recarregar=1 atualiza a extensão instalada e registra
+// a versão que respondeu, para o servidor mostrar o que está ativo.
+if (new URLSearchParams(location.search).has("recarregar")) {
   try {
-    ({ data } = await fetchJson("/api/ollama/status?model=" + encodeURIComponent(model), {
-      cache: "no-store"
-    }, ctrl));
-  } catch (e) {
-    return {
-      ok: false, code: "sem_servidor",
-      message: "Não consegui falar com o servidor local do Separador. Feche esta aba e abra o app pelo atalho abrir_separador.sh."
-    };
-  } finally {
-    clearTimeout(timer);
-    signal.removeEventListener("abort", abort);
-  }
-  if (!data || data.servidor !== "separador") {
-    return {
-      ok: false, code: "servidor_simples",
-      message: "Este endereço está sendo servido por um servidor simples, sem a ponte para o Ollama. Feche a aba e abra o app pelo atalho abrir_separador.sh."
-    };
-  }
-  if (data.ok) return data;
-  return {
-    ok: false,
-    code: data.code || "ollama_erro",
-    message: data.message || "O Ollama não está pronto para descrever imagens."
-  };
-}
-
-async function requestCaption(rec, cell, job) {
-  if (location.protocol === "file:") {
-    throw descError("sem_servidor", "Para descrever células, abra o app pelo atalho abrir_separador.sh.");
-  }
-  let image;
-  try {
-    const canvas = makeCellCanvas(rec.img, cell); // recorte puro, sem número/legenda desenhados
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    image = dataUrl.slice(dataUrl.indexOf(",") + 1);
-  } catch (e) {
-    throw descError("recorte", "Não foi possível preparar o recorte desta célula.");
-  }
-
-  const ctrl = new AbortController();
-  let timedOut = false;
-  const onJobAbort = () => ctrl.abort();
-  job.controller.signal.addEventListener("abort", onJobAbort, { once: true });
-  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, VISION_TIMEOUT_MS);
-
-  let res, data;
-  try {
-    const prompt = /^(?:library\/)?moondream(?::|$)/i.test(job.model) ? MOONDREAM_PROMPT : DESC_PROMPT;
-    ({ res, data } = await fetchJson("/api/ollama/describe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: job.model, prompt, image })
-    }, ctrl));
-  } catch (e) {
-    if (job.cancelled) throw descError("cancelado", "Cancelado.");
-    if (timedOut) {
-      throw descError("timeout", `O modelo demorou mais de ${Math.round(VISION_TIMEOUT_MS / 1000)} s para responder. Tente de novo ou use um modelo menor.`);
-    }
-    throw descError("sem_servidor", "Não consegui falar com o servidor local do Separador. Abra o app pelo atalho abrir_separador.sh.");
-  } finally {
-    clearTimeout(timer);
-    job.controller.signal.removeEventListener("abort", onJobAbort);
-  }
-
-  if (!data) {
-    if (res.status === 404) {
-      throw descError("servidor_simples", "Este servidor não tem a ponte para o Ollama. Abra o app pelo atalho abrir_separador.sh.");
-    }
-    throw descError("erro_servidor", `O servidor local respondeu com erro (${res.status}).`);
-  }
-  if (data.ok === false) {
-    throw descError(data.code || "ollama_erro", data.message || "Não foi possível descrever esta célula.");
-  }
-  const caption = typeof data.caption === "string" ? data.caption.trim() : "";
-  if (!caption) throw descError("resposta_vazia", "O modelo respondeu sem texto. Tente novamente.");
-  return caption;
-}
-
-async function describeOne(rec, cell, job) {
-  const k = keyOf(rec.id, cell.n);
-  descRuntime.set(k, { status: "running" });
-  refreshDescriptionUI(rec.id, cell.n);
-  try {
-    const caption = await requestCaption(rec, cell, job);
-    if (job.cancelled) {
-      descRuntime.delete(k);
-      refreshDescriptionUI(rec.id, cell.n);
-      return { cancelled: true };
-    }
-    if (!state.images.has(rec.id)) {
-      descRuntime.delete(k);
-      return { cancelled: true };
-    }
-    setDescription(rec, cell, caption, job.model);
-    descRuntime.delete(k);
-    refreshDescriptionUI(rec.id, cell.n);
-    return { ok: true };
-  } catch (e) {
-    if (job.cancelled || (e && e.code === "cancelado")) {
-      descRuntime.delete(k);
-      refreshDescriptionUI(rec.id, cell.n);
-      return { cancelled: true };
-    }
-    descRuntime.set(k, {
-      status: "error",
-      message: e && e.message ? e.message : "Falha ao descrever esta célula."
+    chrome.runtime.sendMessage(EXTENSION_ID, { type: "RECARREGAR" }, async (resposta) => {
+      const falha = chrome.runtime.lastError;
+      const versao = resposta && resposta.versao
+        ? resposta.versao
+        : (falha ? "sem-resposta" : "desconhecida");
+      try {
+        await fetch("/api/extensao", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ versao })
+        });
+      } catch (error) {
+        // Servidor fora do ar: nada a registrar.
+      }
     });
-    refreshDescriptionUI(rec.id, cell.n);
-    return { ok: false, error: e };
+  } catch (error) {
+    // Sem a extensão: nada a recarregar.
   }
 }
 
-async function describeCells(rec, cells, forComparison = false) {
-  if (activeComparison && !forComparison) {
-    toast("Aguarde a comparação das respostas terminar.");
-    return;
-  }
-  if (activeDescJob) {
-    toast("Já existe um lote em andamento. Cancele ou aguarde.");
-    return;
-  }
-  if (!rec || !rec.res || !rec.res.cells || !cells.length) return;
-
-  const model = (state.settings.visionModel || DEFAULT_VISION_MODEL).trim() || DEFAULT_VISION_MODEL;
-  const job = {
-    id: rec.id, name: rec.name, model,
-    total: cells.length, done: 0, failed: 0,
-    current: 0, checking: true, cancelled: false,
-    controller: new AbortController()
-  };
-  activeDescJob = job;
-  descNotices.delete(rec.id);
+async function consultarFluxo(id) {
+  const fluxoStatus = document.getElementById("fluxo-status");
+  const resposta = document.getElementById("resposta");
+  const acoes = document.getElementById("acoes");
+  let value;
   try {
-    updateDescToolbars();
-    const pre = await checkVisionService(model, job.controller.signal);
-    if (job.cancelled) {
-      toast(`Lote cancelado em “${rec.name}”.`);
-      return;
-    }
-    if (!pre.ok) {
-      descNotices.set(rec.id, { code: pre.code, message: pre.message });
-      toast(pre.message);
-      return;
-    }
-    job.checking = false;
+    const response = await fetch("/api/fluxo", { cache: "no-store" });
+    value = await response.json();
+  } catch (error) {
+    fluxoStatus.textContent = "Não consegui falar com o servidor local.";
+    return;
+  }
+  if (!value.ok) return;
+  const job = value.job;
+  if (!job) {
+    fluxoStatus.textContent = "Aguardando um PDF.";
+    return;
+  }
+  marcarPasso("passo-pdf", "feito");
+  if (job.id !== id) {
+    marcarPasso("passo-envio", "ativo");
+    marcarPasso("passo-resposta", "");
+    fluxoStatus.textContent = "Aguardando o PDF anterior terminar para enviar este…";
+    return;
+  }
+  if (job.status === "fila" || job.status === "preparando") {
+    marcarPasso("passo-envio", "ativo");
+    marcarPasso("passo-resposta", "");
+    fluxoStatus.textContent = value.extensao ?
+      "Abrindo o DeepSeek e anexando o PDF…" :
+      "Extensão não conectada. Abra o Chrome pelo atalho do programa.";
+  } else if (job.status === "aguardando") {
+    marcarPasso("passo-envio", "feito");
+    marcarPasso("passo-resposta", "ativo");
+    fluxoStatus.textContent = "DeepSeek processando. Pode deixar esta aba aberta.";
+  } else if (job.status === "concluido") {
+    marcarPasso("passo-envio", "feito");
+    marcarPasso("passo-resposta", "feito");
+    fluxoStatus.textContent = "Resposta salva em " +
+      (job.resposta?.arquivo ? "pdf/respostas/" + job.resposta.arquivo : "pdf/respostas") + ".";
+    textoResposta = job.resposta?.texto || "";
+    resposta.textContent = textoResposta;
+    resposta.hidden = !textoResposta;
+    acoes.hidden = !textoResposta;
+    if (timerFluxo) clearInterval(timerFluxo);
+    timerFluxo = 0;
+    statusNode.className = "";
+    statusNode.textContent = "Fluxo concluído.";
+  } else if (job.status === "erro") {
+    marcarPasso("passo-envio", "falhou");
+    marcarPasso("passo-resposta", "falhou");
+    fluxoStatus.textContent = "Falhou: " + (job.erro || "erro no DeepSeek") +
+      " O PDF anterior foi preservado.";
+    if (timerFluxo) clearInterval(timerFluxo);
+    timerFluxo = 0;
+  }
+}
 
-    for (const cell of cells) {
-      if (job.cancelled) break;
-      job.current = cell.n;
-      updateDescToolbars();
-      const result = await describeOne(rec, cell, job);
-      job.current = 0;
-      if (result.cancelled) break;
-      job.done++;
-      if (!result.ok) job.failed++;
-      updateDescToolbars();
-    }
+function iniciarFluxo(job) {
+  const fluxo = document.getElementById("fluxo");
+  fluxo.hidden = false;
+  fluxo.dataset.job = job.id;
+  document.getElementById("resposta").hidden = true;
+  document.getElementById("acoes").hidden = true;
+  document.getElementById("fluxo-status").textContent = "PDF gerado. Procurando a extensão…";
+  marcarPasso("passo-pdf", "feito");
+  marcarPasso("passo-envio", "ativo");
+  marcarPasso("passo-resposta", "");
+  avisarExtensao();
+  if (timerFluxo) clearInterval(timerFluxo);
+  timerFluxo = setInterval(() => void consultarFluxo(job.id), 2000);
+  void consultarFluxo(job.id);
+}
 
-    const scope = `“${rec.name}”`;
-    if (job.cancelled) {
-      toast(`Lote cancelado: ${job.done} de ${job.total} recortes analisados em ${scope}.`);
-    } else if (job.failed) {
-      toast(`${job.done - job.failed} de ${job.total} recortes descritos em ${scope}; ${job.failed} falhou/falharam.`);
+document.getElementById("copiar").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(textoResposta);
+    statusNode.className = "";
+    statusNode.textContent = "Resposta copiada.";
+  } catch (error) {
+    statusNode.className = "error";
+    statusNode.textContent = "Não consegui copiar; selecione o texto acima.";
+  }
+});
+
+document.getElementById("pasta").addEventListener("click", async () => {
+  try {
+    const response = await fetch("/api/abrir", { method: "POST" });
+    const value = await response.json();
+    if (!response.ok || !value.ok) throw new Error(value.message);
+  } catch (error) {
+    statusNode.className = "error";
+    statusNode.textContent = error.message;
+  }
+});
+
+filesInput.addEventListener("change", async () => {
+  records.length = 0;
+  generateButton.disabled = true; filesInput.disabled = true;
+  const list = document.getElementById("list"); list.replaceChildren();
+  let failed = false;
+  statusNode.className = ""; statusNode.textContent = "Preparando imagens…";
+  try {
+    for (const file of filesInput.files) {
+      const item = document.createElement("li");
+      list.appendChild(item);
+      try {
+        const image = await loadImage(file);
+        const result = analyze(image, { whiteThr: 244, gapMin: 5 });
+        if (result.error) throw new Error(result.error);
+        const header = headerBox(image, result);
+        records.push({ image, result, header });
+        item.textContent = file.name + " — " + result.cells.length + " imagens numeradas.";
+      } catch (error) {
+        failed = true; item.className = "error";
+        item.textContent = file.name + " — " + error.message;
+      }
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    statusNode.className = failed ? "error" : "";
+    statusNode.textContent = failed ? "Selecione novamente as imagens, corrigindo os arquivos indicados." :
+      records.length ? "Tudo pronto para gerar o PDF." : "Selecione uma ou mais imagens.";
+    generateButton.disabled = failed || !records.length;
+  } finally { filesInput.disabled = false; }
+});
+
+generateButton.addEventListener("click", async () => {
+  generateButton.disabled = true; filesInput.disabled = true;
+  statusNode.className = ""; statusNode.textContent = "Gerando PDF…";
+  try {
+    const pages = [];
+    if (location.protocol !== "http:" || location.hostname !== "127.0.0.1") {
+      throw new Error("Abra pelo atalho abrir_separador.bat para salvar o PDF na pasta do programa.");
+    }
+    for (let i = 0; i < records.length; i++) {
+      const canvas = renderPdfPage(records[i], i + 1, records.length);
+      const jpegBlob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.95));
+      if (!jpegBlob) throw new Error("Não consegui preparar uma página do PDF.");
+      pages.push({ width: canvas.width, height: canvas.height, jpeg: new Uint8Array(await jpegBlob.arrayBuffer()) });
+      canvas.width = canvas.height = 1;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    const response = await fetch("/api/pdf", {
+      method: "POST", headers: { "Content-Type": "application/pdf" }, body: makePdf(pages)
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || "Não consegui salvar o PDF.");
+    statusNode.textContent = result.message;
+    if (result.job) iniciarFluxo(result.job);
+  } catch (error) {
+    statusNode.className = "error"; statusNode.textContent = error.message;
+  } finally {
+    generateButton.disabled = !records.length; filesInput.disabled = false;
+  }
+});
+
+// Ao abrir a pagina, mostra o ultimo PDF e a ultima resposta ja registrados.
+(async () => {
+  try {
+    const response = await fetch("/api/fluxo", { cache: "no-store" });
+    const value = await response.json();
+    if (!response.ok || !value.ok || !value.job) return;
+    if (value.job.status === "concluido" || value.job.status === "erro") {
+      document.getElementById("fluxo").hidden = false;
+      await consultarFluxo(value.job.id);
     } else {
-      toast(`${job.total} recorte(s) descrito(s) em ${scope}.`);
+      iniciarFluxo(value.job);
     }
-  } finally {
-    activeDescJob = null;
-    updateDescToolbars();
-    startNextDescription();
-  }
-}
-
-function startNextDescription() {
-  if (activeDescJob || activeComparison) return;
-  for (const id of pendingDescriptions) {
-    pendingDescriptions.delete(id);
-    const rec = state.images.get(id);
-    if (!rec?.res?.cells) continue;
-    const cells = [rec.res.banner?.image, ...rec.res.cells]
-      .filter(cell => cell && !getDescription(rec, cell));
-    if (!cells.length) continue;
-    describeCells(rec, cells);
-    return;
-  }
-}
-
-function retryCellDescription(id, n) {
-  if (activeDescJob) {
-    toast("Aguarde o lote atual terminar ou cancele antes de tentar outra célula.");
-    return;
-  }
-  const rec = state.images.get(id);
-  if (!rec || !rec.res || !rec.res.cells) return;
-  const cell = n === "banner-image" ? rec.res.banner?.image : rec.res.cells.find(c => c.n === n);
-  if (!cell) return;
-  describeCells(rec, [cell]);
-}
-
-function cancelDescriptionJob(id) {
-  const job = activeDescJob;
-  if (!job || (id != null && job.id !== id)) return;
-  job.cancelled = true;
-  job.controller.abort();
-  updateDescToolbars();
-}
-
-/* ----------------------------- CABEÇALHO -------------------------- */
-function bannerPanel(rec) {
-  const panel = el("section", "banner-section");
-  panel.append(el("h2", null, "Cabeçalho"));
-  const banner = rec.res?.banner;
-  if (!banner) {
-    panel.append(el("p", "tiny", "Nenhum cabeçalho foi detectado acima da grade."));
-    return panel;
-  }
-
-  panel.append(makeThumb(rec.img, banner, 800), el("h3", null, "Texto do cabeçalho"));
-  const text = el("p", "banner-text");
-  text.dataset.bannerText = rec.id;
-  text.setAttribute("aria-live", "polite");
-  panel.append(text);
-  fillBannerText(text, rec);
-  panel.append(comparisonControls(rec, true));
-  const read = el("button", null, "Ler texto");
-  read.addEventListener("click", () => readBanner(rec));
-  panel.append(read, el("h3", null, "Imagem de referência"));
-  if (!banner.image) {
-    panel.append(el("p", "tiny", "Nenhuma imagem quadrada detectada no cabeçalho."));
-    return panel;
-  }
-  const describe = el("button", null, "Descrever imagem de referência");
-  describe.addEventListener("click", () => retryCellDescription(rec.id, banner.image.n));
-  panel.append(makeThumb(rec.img, banner.image, 230), buildDescBox(rec, banner.image, "banner"), describe);
-  return panel;
-}
-
-function fillBannerText(node, rec) {
-  node.textContent = rec.bannerOCR?.message || getDescription(rec, rec.res.banner)?.texto || "Aguardando leitura…";
-}
-
-async function readBanner(rec) {
-  const banner = rec.res?.banner;
-  if (!banner || rec.bannerOCR?.running) return;
-  const refresh = () => {
-    const node = document.querySelector("[data-banner-text]");
-    if (node?.dataset.bannerText === rec.id && rec.res.banner === banner) fillBannerText(node, rec);
-  };
-  if (location.protocol === "file:") {
-    rec.bannerOCR = { message: "Abra o Separador pelo atalho local para ler o texto." };
-    refresh();
-    return;
-  }
-  rec.bannerOCR = { running: true, message: "Lendo o texto…" };
-  const reading = rec.bannerOCR;
-  refresh();
-  try {
-    const photo = banner.image;
-    const edge = Math.max(1, Math.round(banner.h * 0.035));
-    const gutter = Math.round(banner.h * 0.1);
-    let x = banner.x + edge, right = banner.x + banner.w - edge;
-    const y = banner.y + edge, height = banner.h - edge * 2;
-    const photoOnRight = photo && photo.x >= banner.x + banner.w * 0.6;
-    const photoOnLeft = photo && photo.x + photo.w <= banner.x + banner.w * 0.4;
-    if (photoOnRight) right = photo.x - gutter;
-    else if (photoOnLeft) x = photo.x + photo.w + gutter;
-    const w = right - x;
-    const scale = Math.min(3, 1200 / w);
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(w * scale);
-    canvas.height = Math.round(height * scale);
-    const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(rec.img, x, y, w, height, 0, 0, canvas.width, canvas.height);
-    if (photo && !photoOnLeft && !photoOnRight) {
-      const sx = canvas.width / w, sy = canvas.height / height;
-      ctx.fillStyle = `rgb(${banner.bg.join(",")})`;
-      ctx.fillRect((photo.x - x) * sx, (photo.y - y) * sy, photo.w * sx, photo.h * sy);
-    }
-    const blob = await toBlob(canvas);
-    const response = await fetch("/api/banner/ocr", { method: "POST", body: blob });
-    const result = await response.json().catch(() => null);
-    if (!result?.ok) throw new Error(result?.message || "Servidor sem suporte à leitura. Reinicie o Separador.");
-    if (state.images.get(rec.id) !== rec || rec.res.banner !== banner) return;
-    const text = result.text.trim();
-    if (text) setDescription(rec, banner, text, "tesseract");
-    rec.bannerOCR = text ? null : { message: "Nenhum texto legível encontrado." };
   } catch (error) {
-    if (rec.bannerOCR === reading) rec.bannerOCR = { message: error.message };
-  } finally {
-    refresh();
+    // Servidor indisponivel: a pagina continua servindo para gerar o PDF.
   }
-}
-
-/* ---------------------------- COMPARAÇÃO -------------------------- */
-function comparisonControls(rec, showGrid = false) {
-  const panel = el("div", "comparison-controls");
-  panel.dataset.comparisonControls = "1";
-  panel.dataset.showGrid = showGrid ? "1" : "0";
-  fillComparisonControls(panel, rec);
-  return panel;
-}
-
-function fillComparisonControls(panel, rec) {
-  const comparison = rec.comparison;
-  const run = el("button", null, "Sugerir respostas");
-  run.disabled = Boolean(comparison?.running);
-  run.addEventListener("click", () => compareCells(rec));
-  const message = el("span", "tiny", comparison?.message || "Compare a pergunta do cabeçalho com as legendas.");
-  message.setAttribute("role", "status");
-  panel.replaceChildren(run, message);
-  if (!comparison?.suggestions) return;
-
-  if (panel.dataset.showGrid === "1") {
-    const show = el("button", null, "Ver sugestões na grade");
-    show.addEventListener("click", () => state.ui.tabs.querySelector('[data-tab="cells"]')?.click());
-    panel.append(show);
-  }
-  const apply = el("button", null, "Marcar sugestões pendentes");
-  apply.addEventListener("click", () => applyComparison(rec));
-  panel.append(apply);
-}
-
-function fillComparisonResult(node, rec) {
-  const item = rec.comparison?.suggestions?.[node.dataset.comparisonCell];
-  node.className = item ? `comparison-result ${item.status}` : "comparison-result hidden";
-  if (!item) { node.textContent = ""; return; }
-  const label = { match: "Corresponde", no_match: "Não corresponde", uncertain: "Incerta" }[item.status];
-  node.replaceChildren(el("strong", null, label), document.createTextNode(` · ${item.reason}`));
-}
-
-function refreshComparison(rec) {
-  if (state.activeId !== rec.id) return;
-  document.querySelectorAll("[data-comparison-controls]").forEach(node => fillComparisonControls(node, rec));
-  document.querySelectorAll("[data-comparison-cell]").forEach(node => fillComparisonResult(node, rec));
-}
-
-async function compareCells(rec) {
-  if (activeComparison) {
-    toast("Já existe uma comparação em andamento.");
-    return;
-  }
-  if (location.protocol === "file:") {
-    toast("Abra o Separador pelo atalho local para comparar as respostas.");
-    return;
-  }
-  if (activeDescJob) {
-    toast("Aguarde o lote de descrições terminar.");
-    return;
-  }
-  const source = rec.res;
-  const { banner, cells } = source;
-  const comparison = { running: true, message: "Comparando as descrições com a pergunta…" };
-  activeComparison = true;
-  rec.comparison = comparison;
-  refreshComparison(rec);
-  const current = () => state.images.get(rec.id) === rec && rec.res === source && rec.comparison === comparison;
-  const suggestions = Object.fromEntries(cells.map(cell => [cell.n, {
-    status: "uncertain",
-    reason: getDescription(rec, cell) ? "Sem uma avaliação válida." : "Sem descrição da imagem."
-  }]));
-  try {
-    if (!banner) throw new Error("Nenhum cabeçalho detectado. Confira o recorte da imagem.");
-    if (!getDescription(rec, banner)?.texto) {
-      comparison.message = "Lendo a pergunta do cabeçalho…";
-      refreshComparison(rec);
-      await readBanner(rec);
-      if (!current()) return;
-      if (!getDescription(rec, banner)?.texto) {
-        throw new Error(rec.bannerOCR?.message || "Não foi possível ler a pergunta do cabeçalho.");
-      }
-    }
-    const missing = [banner.image, ...cells].filter(cell => cell && !getDescription(rec, cell)?.texto);
-    if (missing.length) {
-      comparison.message = `Descrevendo ${missing.length} recorte(s) antes de comparar…`;
-      refreshComparison(rec);
-      await describeCells(rec, missing, true);
-      if (!current()) return;
-      if (missing.some(cell => !getDescription(rec, cell)?.texto)) {
-        throw new Error(descNotices.get(rec.id)?.message || "Preparação interrompida: faltam descrições. Tente novamente.");
-      }
-    }
-    const question = getDescription(rec, banner).texto;
-    const reference = banner.image && getDescription(rec, banner.image)?.texto;
-    const described = cells.map(cell => [cell.n, getDescription(rec, cell)?.texto]).filter(([, caption]) => caption);
-    comparison.message = "Comparando as descrições com a pergunta…";
-    refreshComparison(rec);
-    const batchSize = 3;
-    for (let offset = 0; offset < described.length; offset += batchSize) {
-      if (!current()) return;
-      const batch = Object.fromEntries(described.slice(offset, offset + batchSize)
-        .map(([n, caption]) => [n, caption.slice(0, 1200)]));
-      const response = await fetch("/api/banner/compare", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: question.slice(0, 1800), reference: reference?.slice(0, 1200) || "", cells: batch }),
-        signal: AbortSignal.timeout(VISION_TIMEOUT_MS)
-      });
-      const result = await response.json().catch(() => null);
-      if (!result?.ok) throw new Error(result?.message || "O servidor local não respondeu à comparação.");
-      Object.assign(suggestions, result.suggestions);
-    }
-    if (!current()) return;
-    comparison.suggestions = suggestions;
-    const matches = Object.values(suggestions).filter(item => item.status === "match").length;
-    comparison.message = `${matches} sugestão(ões) de correspondência. Confira os motivos na grade.`;
-  } catch (error) {
-    comparison.message = error.message;
-  } finally {
-    activeComparison = false;
-    comparison.running = false;
-    if (current()) refreshComparison(rec);
-    startNextDescription();
-  }
-}
-
-function applyComparison(rec) {
-  const suggestions = rec.comparison?.suggestions;
-  const pending = rec.res.cells.filter(cell =>
-    suggestions?.[cell.n]?.status === "match" && getMark(rec.id, cell.n).status === "pendente");
-  if (!pending.length) { toast("Nenhuma sugestão pendente para marcar."); return; }
-  if (!confirm(`Marcar ${pending.length} célula(s) sugerida(s)?`)) return;
-  for (const cell of pending) {
-    setMark(rec.id, cell.n, { status: "marcada" });
-    syncStatusEverywhere(rec.id, cell.n);
-  }
-  refreshCounts();
-  toast(`${pending.length} célula(s) marcada(s).`);
-}
-
-/* ------------------------------ CÉLULAS --------------------------- */
-function cellsPanel(rec) {
-  const panel = el("div", "panel-cells");
-  if (!rec.res || !rec.res.cells || !rec.res.cells.length) {
-    panel.appendChild(errorBox(rec));
-    return panel;
-  }
-  panel.appendChild(descriptionToolbar(rec));
-  if (rec.res.banner) panel.append(comparisonControls(rec));
-  const grid = el("div", "cells");
-  for (const cell of rec.res.cells) grid.appendChild(cellCard(rec, cell));
-  panel.appendChild(grid);
-  return panel;
-}
-
-function cellCard(rec, cell) {
-  const id = rec.id, n = cell.n;
-  const m = getMark(id, n);
-
-  const card = el("div", "cell");
-  card.dataset.id = id;
-  card.dataset.n = String(n);
-  if (m.status === "marcada") card.classList.add("marcada");
-  if (m.status === "descartada") card.classList.add("descartada");
-  if (state.selected && state.selected.id === id && state.selected.n === n) card.classList.add("selected");
-
-  const thumb = el("div", "thumb");
-  thumb.title = "Abrir célula";
-  thumb.appendChild(makeThumb(rec.img, cell, 440));
-  thumb.append(el("span", "num", String(n)), el("span", "loc", `L${cell.linha} · C${cell.coluna}`));
-  thumb.addEventListener("click", () => openDrawer(id, n));
-
-  const meta = el("div", "meta");
-  const sel = document.createElement("select");
-  [["pendente", "Pendente"], ["marcada", "Marcada"], ["descartada", "Descartada"]].forEach(([v, t]) => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = t;
-    sel.appendChild(o);
-  });
-  sel.value = m.status;
-  const nota = document.createElement("input");
-  nota.type = "text";
-  nota.maxLength = 300;
-  nota.placeholder = "Observação (opcional)";
-  nota.value = m.nota || "";
-
-  sel.addEventListener("change", () => {
-    setMark(id, n, { status: sel.value });
-    refreshCounts();
-    syncStatusEverywhere(id, n);
-  });
-  nota.addEventListener("input", () => setMark(id, n, { nota: nota.value }));
-
-  const comparison = el("div");
-  comparison.dataset.comparisonCell = String(n);
-  fillComparisonResult(comparison, rec);
-  meta.append(sel, nota, buildDescBox(rec, cell, "card"), comparison);
-  card.append(thumb, meta);
-  return card;
-}
-
-/* ----------------------------- MARCAÇÕES -------------------------- */
-function marksFilterBar(rec, onChange) {
-  const filters = el("div", "filters");
-  const defs = [["todas", "Todas"], ["pendente", "Pendentes"], ["marcada", "Marcadas"], ["descartada", "Descartadas"]];
-  const chips = {};
-  for (const [val, label] of defs) {
-    const c = countsFor(rec.id);
-    const num = val === "todas" ? c.total : c[val];
-    const chip = el("button", "chip" + (state.filter === val ? " active" : ""), label);
-    chip.dataset.filter = val;
-    chip.appendChild(el("span", "n", String(num)));
-    chip.addEventListener("click", () => {
-      state.filter = val;
-      Object.entries(chips).forEach(([k, b]) => b.classList.toggle("active", k === val));
-      onChange();
-    });
-    chips[val] = chip;
-    filters.appendChild(chip);
-  }
-  const search = document.createElement("input");
-  search.type = "text";
-  search.className = "search";
-  search.placeholder = "Buscar número, local ou observação…";
-  search.value = state.search;
-  search.addEventListener("input", () => { state.search = search.value; onChange(); });
-  filters.appendChild(search);
-  return filters;
-}
-
-function marksVisibleCells(rec) {
-  const q = state.search.trim().toLowerCase();
-  return rec.res.cells.filter(cell => {
-    const m = getMark(rec.id, cell.n);
-    if (state.filter !== "todas" && (m.status || "pendente") !== state.filter) return false;
-    if (q) {
-      const hay = `${cell.n} l${cell.linha} c${cell.coluna} ${cell.linha} ${cell.coluna} ${m.status || "pendente"} ${m.nota || ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
-}
-
-function marksRow(rec, cell) {
-  const m = getMark(rec.id, cell.n);
-  const tr = document.createElement("tr");
-  tr.dataset.id = rec.id;
-  tr.dataset.n = String(cell.n);
-  if (state.selected && state.selected.id === rec.id && state.selected.n === cell.n) tr.classList.add("selected");
-
-  const tdN = el("td", "n", String(cell.n));
-  const tdLoc = el("td", "loc", `L${cell.linha} · C${cell.coluna}`);
-
-  const tdSt = el("td", "st");
-  const sel = document.createElement("select");
-  [["pendente", "Pendente"], ["marcada", "Marcada"], ["descartada", "Descartada"]].forEach(([v, t]) => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = t;
-    sel.appendChild(o);
-  });
-  sel.value = m.status;
-  sel.addEventListener("change", () => {
-    setMark(rec.id, cell.n, { status: sel.value });
-    syncStatusEverywhere(rec.id, cell.n);
-    refreshCounts();
-  });
-  tdSt.appendChild(sel);
-
-  const tdNt = el("td", "nt");
-  const inp = document.createElement("input");
-  inp.type = "text";
-  inp.maxLength = 300;
-  inp.placeholder = "—";
-  inp.value = m.nota || "";
-  inp.addEventListener("input", () => setMark(rec.id, cell.n, { nota: inp.value }));
-  tdNt.appendChild(inp);
-
-  tr.append(tdN, tdLoc, tdSt, tdNt);
-  tr.addEventListener("click", e => {
-    if (e.target.closest("select, input, button")) return;
-    openDrawer(rec.id, cell.n);
-  });
-  return tr;
-}
-
-function renderMarksRows(rec, tbody) {
-  tbody.innerHTML = "";
-  const cells = marksVisibleCells(rec);
-  if (!cells.length) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 4;
-    td.className = "tiny";
-    td.style.padding = "18px";
-    td.style.textAlign = "center";
-    td.textContent = "Nenhuma célula com esse filtro.";
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-    return;
-  }
-  for (const cell of cells) tbody.appendChild(marksRow(rec, cell));
-}
-
-function marksPanel(rec) {
-  const panel = el("div", "panel-marks");
-  if (!rec.res || !rec.res.cells || !rec.res.cells.length) {
-    panel.appendChild(errorBox(rec));
-    return panel;
-  }
-
-  const tbody = document.createElement("tbody");
-  const renderRows = () => renderMarksRows(rec, tbody);
-  panel.appendChild(marksFilterBar(rec, renderRows));
-
-  const wrap = el("div", "table-wrap");
-  const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>
-      <th>#</th><th>Local</th><th>Status</th><th>Observação</th>
-    </tr></thead>`;
-  table.appendChild(tbody);
-  wrap.appendChild(table);
-  panel.appendChild(wrap);
-
-  state.ui.renderMarksRows = renderRows;
-  renderRows();
-  return panel;
-}
-
-/* ================================================================== */
-/* Gaveta de detalhe da célula                                        */
-/* ================================================================== */
-function openDrawer(id, n) {
-  state.selected = { id, n };
-  renderDrawer();
-  highlightSelection();
-}
-function closeDrawer() {
-  state.selected = null;
-  const d = $("#drawer");
-  d.classList.remove("open");
-  d.innerHTML = "";
-  highlightSelection();
-}
-function stepSelection(delta) {
-  if (!state.selected) return;
-  const rec = state.images.get(state.selected.id);
-  if (!rec || !rec.res || !rec.res.cells || !rec.res.cells.length) return;
-  const cells = rec.res.cells;
-  let i = cells.findIndex(c => c.n === state.selected.n);
-  if (i < 0) i = 0;
-  i = (i + delta + cells.length) % cells.length;
-  openDrawer(rec.id, cells[i].n);
-}
-
-function renderDrawer() {
-  const d = $("#drawer");
-  if (!state.selected) { d.classList.remove("open"); d.innerHTML = ""; return; }
-  const { id, n } = state.selected;
-  const rec = state.images.get(id);
-  if (!rec || !rec.res || !rec.res.cells) { closeDrawer(); return; }
-  const cell = rec.res.cells.find(c => c.n === n);
-  if (!cell) { closeDrawer(); return; }
-  const m = getMark(id, n);
-  const total = rec.res.cells.length;
-
-  d.innerHTML = `
-    <div class="drawer-head">
-      <span class="drawer-num">${cell.n}</span>
-      <div class="drawer-title">
-        <strong>Célula ${cell.n} <span class="tiny">de ${total}</span></strong>
-        <span>L${cell.linha} · C${cell.coluna}</span>
-      </div>
-      <button class="icon-btn" id="drawerClose" title="Fechar (Esc)">✕</button>
-    </div>
-    <div class="drawer-body">
-      <div class="drawer-img" id="drawerImg"></div>
-      <div class="drawer-name"></div>
-      <div class="drawer-desc">
-        <div id="drawerDescBox"></div>
-        <button id="drawerDescribe"></button>
-      </div>
-      <label class="field"><span>Status</span>
-        <select id="drawerStatus">
-          <option value="pendente">Pendente</option>
-          <option value="marcada">Marcada</option>
-          <option value="descartada">Descartada</option>
-        </select>
-      </label>
-      <label class="field"><span>Observação</span>
-        <textarea id="drawerNote" rows="3" maxlength="300" placeholder="Escreva aqui…"></textarea>
-      </label>
-      <div class="drawer-nav">
-        <button id="drawerPrev">‹ Anterior</button>
-        <button id="drawerNext">Próxima ›</button>
-      </div>
-      <button id="drawerDownload">Baixar esta célula</button>
-      <div class="tiny" style="text-align:center">Use ← → para navegar · Esc para fechar</div>
-    </div>`;
-
-  d.classList.add("open");
-  d.querySelector(".drawer-name").textContent = rec.name;
-  d.querySelector("#drawerImg").appendChild(makeThumb(rec.img, cell, 900));
-  d.querySelector("#drawerDescBox").appendChild(buildDescBox(rec, cell, "drawer"));
-
-  const descBtn = d.querySelector("#drawerDescribe");
-  descBtn.addEventListener("click", () => retryCellDescription(id, n));
-  syncDrawerDescribe(rec, cell);
-
-  const sel = d.querySelector("#drawerStatus");
-  sel.value = m.status;
-  const note = d.querySelector("#drawerNote");
-  note.value = m.nota || "";
-
-  sel.addEventListener("change", () => {
-    setMark(id, n, { status: sel.value });
-    refreshCounts();
-    syncStatusEverywhere(id, n);
-  });
-  note.addEventListener("input", () => setMark(id, n, { nota: note.value }));
-
-  d.querySelector("#drawerClose").addEventListener("click", closeDrawer);
-  d.querySelector("#drawerPrev").addEventListener("click", () => stepSelection(-1));
-  d.querySelector("#drawerNext").addEventListener("click", () => stepSelection(1));
-  d.querySelector("#drawerDownload").addEventListener("click", async () => {
-    const c = makeCellCanvas(rec.img, cell);
-    const blob = await toBlob(c);
-    download(`${baseName(rec.name)}_celula_${pad2(cell.n)}.png`, blob);
-  });
-}
-
-/* ================================================================== */
-/* Sincronização entre painéis                                        */
-/* ================================================================== */
-function refreshCounts() {
-  renderSidebar();
-  const rec = state.activeId ? state.images.get(state.activeId) : null;
-  if (rec) {
-    const sub = document.querySelector("[data-sub]");
-    if (sub) sub.textContent = subText(rec);
-    const mc = document.querySelector("[data-markcount]");
-    if (mc) {
-      const c = countsFor(rec.id);
-      mc.textContent = c.marcada ? `(${c.marcada})` : "";
-    }
-    // contadores dos filtros (aba Marcações)
-    const chips = document.querySelectorAll(".chip[data-filter]");
-    if (chips.length) {
-      const c = countsFor(rec.id);
-      chips.forEach(chip => {
-        const f = chip.dataset.filter;
-        const num = f === "todas" ? c.total : c[f];
-        const span = chip.querySelector(".n");
-        if (span) span.textContent = String(num);
-      });
-      if (state.ui.renderMarksRows) state.ui.renderMarksRows();
-    }
-  }
-}
-
-function syncStatusEverywhere(id, n) {
-  const m = getMark(id, n);
-  document.querySelectorAll(".cell").forEach(card => {
-    if (card.dataset.id !== id || Number(card.dataset.n) !== n) return;
-    card.classList.toggle("marcada", m.status === "marcada");
-    card.classList.toggle("descartada", m.status === "descartada");
-    const sel = card.querySelector("select");
-    if (sel && sel.value !== m.status) sel.value = m.status;
-  });
-  document.querySelectorAll("tr[data-n]").forEach(tr => {
-    if (tr.dataset.id !== id || Number(tr.dataset.n) !== n) return;
-    const sel = tr.querySelector("select");
-    if (sel && sel.value !== m.status) sel.value = m.status;
-  });
-  if (state.selected && state.selected.id === id && state.selected.n === n) {
-    const sel = $("#drawerStatus");
-    if (sel && sel.value !== m.status) sel.value = m.status;
-  }
-}
-
-function highlightSelection() {
-  document.querySelectorAll(".cell.selected, tr.selected").forEach(e => e.classList.remove("selected"));
-  if (state.selected) {
-    const { id, n } = state.selected;
-    document.querySelectorAll(".cell").forEach(card => {
-      if (card.dataset.id === id && Number(card.dataset.n) === n) card.classList.add("selected");
-    });
-    document.querySelectorAll("tr[data-n]").forEach(tr => {
-      if (tr.dataset.id === id && Number(tr.dataset.n) === n) tr.classList.add("selected");
-    });
-    if (state.tab === "map" && state.ui.canvas && state.ui.rec) {
-      const selN = state.selected.id === state.ui.rec.id ? n : null;
-      drawAnnotated(state.ui.canvas, state.ui.rec, 2000, selN);
-    }
-  }
-}
-
-/* ================================================================== */
-/* Ações                                                              */
-/* ================================================================== */
-const removingImages = new Set();
-
-async function removeImage(rec) {
-  const { id, name } = rec;
-  if (removingImages.has(id) || !state.images.has(id)) return;
-  if (!confirm(`Apagar “${name}” do Separador? As marcações e legendas desta imagem também serão apagadas.`)) return;
-
-  removingImages.add(id);
-  const deleted = await idbDelete(id);
-  removingImages.delete(id);
-  if (!deleted) {
-    toast("Não foi possível apagar a imagem do armazenamento do navegador.");
-    return;
-  }
-
-  pendingDescriptions.delete(id);
-  cancelDescriptionJob(id);
-  state.images.delete(id);
-  for (const key of Object.keys(marks)) {
-    if (key.startsWith(id + "::")) delete marks[key];
-  }
-  saveMarks();
-  deleteDescriptionsFor(id);
-  resetDescriptionStatus(rec);
-  if (state.selected?.id === id) closeDrawer();
-
-  if (state.activeId === id) {
-    state.activeId = state.images.keys().next().value ?? null;
-    state.tab = "map";
-    state.zoom = 1;
-    renderMain();
-  } else if (state.activeId === null) {
-    renderMain();
-  }
-  renderSidebar();
-  toast(`“${name}” foi apagada do Separador.`);
-}
-
-async function addFiles(fileList) {
-  const files = [...fileList].filter(f => f.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name));
-  if (!files.length) { toast("Nenhum arquivo de imagem encontrado."); return; }
-
-  setBusy("Processando…");
-  let firstId = null;
-  let firstGridId = null;
-  let ok = 0, fail = 0;
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    setBusy(`Processando ${i + 1}/${files.length}…`);
-    await tick();
-    try {
-      const id = file.name + "|" + file.size + "|" + file.lastModified;
-      const img = await loadImageBlob(file);
-      if (removingImages.has(id)) {
-        fail++;
-        continue;
-      }
-      const res = analyze(img, state.settings);
-      const rec = {
-        id, name: file.name, type: file.type, size: file.size,
-        lastModified: file.lastModified, addedAt: Date.now(),
-        blob: file, img, res
-      };
-      cancelDescriptionJob(id);
-      state.images.set(id, rec);
-      await idbPut({
-        id, name: rec.name, type: rec.type, size: rec.size,
-        lastModified: rec.lastModified, addedAt: rec.addedAt, blob: file
-      });
-      if (!firstId) firstId = id;
-      if (res.cells?.length) {
-        firstGridId ??= id;
-        if (location.protocol !== "file:") pendingDescriptions.add(id);
-        if (res.banner && !getDescription(rec, res.banner)) readBanner(rec);
-      }
-      ok++;
-      if (res.error) toast(`Grade não detectada em "${file.name}". Ajuste em ⚙ e reprocesse.`);
-    } catch (e) {
-      fail++;
-      toast(`Erro ao abrir "${file.name}".`);
-    }
-  }
-
-  setBusy("");
-  renderSidebar();
-  if (firstGridId) selectImage(firstGridId, "cells");
-  else if (firstId) selectImage(firstId);
-  else renderMain();
-  if (ok) toast(`${ok} imagem(ns) adicionada(s).`);
-  if (fail) toast(`${fail} arquivo(s) não puderam ser abertos.`);
-  startNextDescription();
-}
-
-function resetDescriptionStatus(rec) {
-  rec.bannerOCR = null;
-  rec.comparison = null;
-  descNotices.delete(rec.id);
-  for (const key of descRuntime.keys()) {
-    if (key.startsWith(rec.id + "::")) descRuntime.delete(key);
-  }
-  purgeInvalidDescriptions(rec);
-}
-
-async function reprocessImage(id) {
-  const rec = state.images.get(id);
-  if (!rec) return;
-  pendingDescriptions.delete(id);
-  cancelDescriptionJob(id);
-  if (state.selected && state.selected.id === id) closeDrawer();
-  setBusy("Reprocessando…");
-  await tick();
-  rec.res = analyze(rec.img, state.settings);
-  rec._thumb = null;
-  resetDescriptionStatus(rec);
-  if (state.zoom) state.zoom = 1;
-  renderSidebar();
-  if (state.activeId === id) renderMain();
-  setBusy("");
-  toast(rec.res.error ? "Ainda não encontrei a grade. Tente outro ajuste." : "Reprocessado.");
-}
-
-async function reprocessAll() {
-  if (!state.images.size) { toast("Nenhuma imagem carregada."); return; }
-  pendingDescriptions.clear();
-  cancelDescriptionJob(null);
-  closeDrawer();
-  setBusy("Reprocessando todas…");
-  await tick();
-  for (const rec of state.images.values()) {
-    rec.res = analyze(rec.img, state.settings);
-    rec._thumb = null;
-    resetDescriptionStatus(rec);
-    await tick();
-  }
-  setBusy("");
-  renderSidebar();
-  renderMain();
-  toast("Todas reprocessadas.");
-}
-
-function exportAllCsv() {
-  if (!state.images.size) { toast("Nenhuma imagem carregada."); return; }
-  const rows = [["imagem", "numero", "linha", "coluna", "status", "nota"]];
-  for (const rec of state.images.values()) {
-    for (const cell of (rec.res.cells || [])) {
-      const m = getMark(rec.id, cell.n);
-      rows.push([rec.name, cell.n, cell.linha, cell.coluna, m.status, m.nota || ""]);
-    }
-  }
-  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
-  downloadText("marcacoes_todas.csv", "\ufeff" + csv, "text/csv;charset=utf-8");
-}
-
-function clearAllMarks() {
-  if (!confirm("Limpar todas as marcações e observações?")) return;
-  marks = {};
-  saveMarks();
-  document.querySelectorAll(".cell").forEach(c => {
-    c.classList.remove("marcada", "descartada");
-    const sel = c.querySelector("select");
-    if (sel) sel.value = "pendente";
-    const inp = c.querySelector('input[type="text"]');
-    if (inp) inp.value = "";
-  });
-  if (state.activeId) renderMain();
-  renderSidebar();
-  closeDrawer();
-  toast("Marcações limpas.");
-}
-
-/* ================================================================== */
-/* Ajustes                                                            */
-/* ================================================================== */
-function openSettings() {
-  $("#thr").value = state.settings.whiteThr;
-  $("#thrVal").textContent = state.settings.whiteThr;
-  $("#gap").value = state.settings.gapMin;
-  $("#visionModel").value = state.settings.visionModel || DEFAULT_VISION_MODEL;
-  $("#settingsModal").classList.add("open");
-}
-function closeSettings() { $("#settingsModal").classList.remove("open"); }
-
-/* ================================================================== */
-/* Eventos                                                            */
-/* ================================================================== */
-function bindEvents() {
-  const fileInput = $("#fileInput");
-
-  $("#addBtn").addEventListener("click", () => fileInput.click());
-  $("#settingsBtn").addEventListener("click", openSettings);
-  $("#settingsClose").addEventListener("click", closeSettings);
-  $("#settingsDone").addEventListener("click", closeSettings);
-  $("#settingsModal").addEventListener("click", e => {
-    if (e.target === $("#settingsModal")) closeSettings();
-  });
-  fileInput.addEventListener("change", () => {
-    addFiles(fileInput.files);
-    fileInput.value = "";
-  });
-
-  $("#thr").addEventListener("input", e => {
-    state.settings.whiteThr = +e.target.value;
-    $("#thrVal").textContent = e.target.value;
-    saveSettings();
-  });
-  $("#gap").addEventListener("change", e => {
-    state.settings.gapMin = clamp(+e.target.value || 5, 2, 40);
-    e.target.value = state.settings.gapMin;
-    saveSettings();
-  });
-  $("#visionModel").addEventListener("change", e => {
-    state.settings.visionModel = (e.target.value || "").trim().slice(0, 80) || DEFAULT_VISION_MODEL;
-    e.target.value = state.settings.visionModel;
-    saveSettings();
-    updateDescToolbars();
-  });
-  $("#reprocessAll").addEventListener("click", () => { closeSettings(); reprocessAll(); });
-  $("#exportAllCsv").addEventListener("click", exportAllCsv);
-  $("#clearMarks").addEventListener("click", () => { closeSettings(); clearAllMarks(); });
-  $("#csvBtn").addEventListener("click", exportAllCsv);
-
-  // arrastar e soltar em qualquer lugar
-  let dragDepth = 0;
-  const overlay = $("#dropOverlay");
-  window.addEventListener("dragenter", e => {
-    if (!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
-    dragDepth++;
-    overlay.classList.add("show");
-  });
-  window.addEventListener("dragleave", () => {
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (!dragDepth) overlay.classList.remove("show");
-  });
-  window.addEventListener("dragover", e => e.preventDefault());
-  window.addEventListener("drop", e => {
-    e.preventDefault();
-    dragDepth = 0;
-    overlay.classList.remove("show");
-    if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
-  });
-
-  // colar imagem
-  document.addEventListener("paste", e => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    const files = [];
-    for (const it of items) if (it.type.startsWith("image/")) {
-      const f = it.getAsFile();
-      if (f) files.push(f);
-    }
-    if (files.length) { e.preventDefault(); addFiles(files); }
-  });
-
-  // teclado
-  document.addEventListener("keydown", e => {
-    const t = e.target;
-    const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
-    if (e.key === "Escape") {
-      if ($("#settingsModal").classList.contains("open")) { closeSettings(); return; }
-      if (state.selected) { closeDrawer(); return; }
-    }
-    if (typing || !state.selected) return;
-    if (e.key === "ArrowLeft") { e.preventDefault(); stepSelection(-1); }
-    else if (e.key === "ArrowRight") { e.preventDefault(); stepSelection(1); }
-    else if (e.key === "Escape") { closeDrawer(); }
-  });
-}
-
-/* ================================================================== */
-/* Inicialização                                                      */
-/* ================================================================== */
-function startOllamaSession() {
-  if (location.protocol === "http:" && location.hostname === "127.0.0.1") {
-    let ollamaSession;
-    window.addEventListener("pageshow", () => {
-      ollamaSession = new EventSource("/api/ollama/session");
-    });
-    window.addEventListener("pagehide", () => ollamaSession?.close());
-  }
-}
-
-bindEvents();
-startOllamaSession();
-
-(async function init() {
-  const saved = await idbAll();
-  saved.sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
-
-  if (saved.length) setBusy(`Carregando ${saved.length} imagem(ns)…`);
-
-  for (const rec of saved) {
-    try {
-      const img = await loadImageBlob(rec.blob);
-      const res = analyze(img, state.settings);
-      const loaded = { ...rec, img, res };
-      state.images.set(rec.id, loaded);
-      purgeInvalidDescriptions(loaded);
-    } catch (e) { /* arquivo corrompido: ignora */ }
-    await tick();
-  }
-
-  setBusy("");
-  renderSidebar();
-  if (state.images.size) {
-    state.activeId = [...state.images.keys()][0];
-    state.tab = "map";
-    state.zoom = 1;
-  }
-  renderMain();
 })();
 </script>
 </body>
