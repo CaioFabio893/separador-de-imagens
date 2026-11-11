@@ -5,14 +5,5 @@ __pycache__/
 # Arquivos de execucao do servidor local
 tmp/
 
-# Estado e saida do fluxo PDF -> DeepSeek
-pdf/.fluxo.json
-pdf/.vigia_deepseek.json
-pdf/respostas/
-pdf/*.pdf
-
-# Codigo e imagens privados do robo
-imagem/
-
 # Token local da extensao (gerado pelo servidor)
 pdf/extensao_deepseek/config_local.js
