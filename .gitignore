@@ -7,3 +7,11 @@ tmp/
 
 # Token local da extensao (gerado pelo servidor)
 pdf/extensao_deepseek/config_local.js
+
+# Dados privados: capturas, PDFs, respostas e historico ficam somente no computador
+imagem/
+pdf/*.pdf
+pdf/respostas/
+pdf/.fluxo.json
+pdf/.vigia_deepseek.json
+*.tmp-*

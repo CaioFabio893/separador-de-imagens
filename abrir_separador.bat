@@ -1,17 +1,13 @@
 @echo off
-setlocal
-rem Atalho do Separador de Imagens para Windows.
-rem Sobe o servidor local e abre a pagina no Chrome do perfil da extensao.
+title Robo - PDF - ChatGPT Web
 cd /d "%~dp0"
-
-echo Iniciando o Separador de Imagens...
-echo Deixe esta janela aberta. Feche-a para encerrar o servidor.
-py servidor_separador.py --port 8765 --port-file "tmp\porta.txt" --abrir
-
+set "SEPARADOR_PY=py -3"
+py -3 --version >nul 2>&1
+if errorlevel 1 set "SEPARADOR_PY=python"
+%SEPARADOR_PY% servidor_separador.py
 if errorlevel 1 (
   echo.
-  echo Nao foi possivel iniciar o Separador de Imagens.
+  echo Nao foi possivel iniciar. Confira a mensagem acima e o GUIA_INSTALACAO.txt.
   pause
+  exit /b 1
 )
-
-endlocal

@@ -1,37 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "PDF → DeepSeek",
-  "version": "3.1.1",
+  "name": "PDF → ChatGPT Web",
+  "version": "5.0.6",
   "minimum_chrome_version": "120",
-  "description": "Envia o PDF gerado ao DeepSeek e salva a resposta em TXT na pasta respostas.",
+  "description": "Anexa o PDF ao ChatGPT Web, envia e salva a resposta no programa local. Sem API.",
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
-    "https://chat.deepseek.com/*",
+    "https://chatgpt.com/*",
     "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "PDF → DeepSeek"
+    "default_title": "PDF → ChatGPT Web"
   },
   "content_scripts": [
     {
       "matches": [
-        "https://chat.deepseek.com/*"
+        "https://chatgpt.com/*"
       ],
       "js": [
-        "deepseek.js"
+        "chatgpt.js"
       ],
       "run_at": "document_idle"
     }
-  ],
-  "externally_connectable": {
-    "matches": [
-      "http://127.0.0.1/*"
-    ]
-  }
+  ]
 }
