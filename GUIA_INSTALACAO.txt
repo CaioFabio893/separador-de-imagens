@@ -1,14 +1,12 @@
 GUIA PARA INSTALAR EM OUTRO COMPUTADOR
-Robo + PDF + ChatGPT Web, em um unico programa no terminal
+Print da tela + PDF + API da OpenAI, em um unico programa no terminal
 
 O QUE O PROGRAMA FAZ
 
-Abre o robo -> captura a imagem -> gera o PDF numerado (sem abrir pagina) ->
-a extensao envia ao ChatGPT Web -> salva a resposta em TXT -> o robo clica nos
-numeros e confirma -> captura a proxima imagem. Tudo aparece no mesmo terminal.
-
-O programa usa o site do ChatGPT Web e a extensao incluida neste projeto;
-nao exige chave de API. A extensao nao e oficial da OpenAI.
+Tira um print da tela a cada 5 segundos -> ao achar a grade 3x3, gera o PDF
+numerado (sem abrir pagina) -> envia a pagina numerada a API da OpenAI ->
+salva a resposta em TXT -> clica nos numeros e confirma com o mouse do Windows
+-> volta a vigiar a tela. Tudo aparece no mesmo terminal. So funciona no Windows.
 
 1. RECEBER O PROGRAMA
 
@@ -16,72 +14,69 @@ Copie a pasta do projeto ou baixe o ZIP:
 https://github.com/CaioFabio893/separador-de-imagens
 Bastam servidor_separador.py, abrir_separador.bat, INSTALAR.bat e este guia.
 As pastas necessarias sao criadas sozinhas. Nao envie imagens, PDFs,
-respostas nem a chave local (config_local.js) para outra pessoa.
+respostas nem o chave_openai.txt para outra pessoa.
 
 2. INSTALAR OS REQUISITOS
 
 Google Chrome: https://www.google.com/chrome/
 Python 3.12 ou superior: https://www.python.org/downloads/windows/
 (habilite o comando py). Depois execute INSTALAR.bat: ele instala o Selenium,
-se faltar, e prepara a extensao.
+se faltar. O Chrome e usado invisivel, so para processar as imagens.
 
-3. INSTALAR A EXTENSAO NO CHROME (UMA VEZ)
+3. COLOCAR A CHAVE DA API DA OPENAI (OBRIGATORIO)
 
-No perfil do Chrome que voce usa com o ChatGPT, abra chrome://extensions,
-ative Modo do desenvolvedor, clique em Carregar sem compactacao e escolha a
-pasta pdf\extensao_deepseek. Confira PDF -> ChatGPT Web, versao 5.0.0.
-Se o Chrome pedir acesso a chatgpt.com, permita.
-Nas proximas atualizacoes a extensao se recarrega sozinha.
+Crie o arquivo chave_openai.txt na pasta do programa contendo somente a sua
+chave da API (comeca com sk-). Sem a chave o programa avisa e nao abre.
+Modelo padrao: gpt-4.1. Para trocar: py servidor_separador.py --modelo NOME
+Nunca envie o chave_openai.txt para outra pessoa nem para o GitHub
+(ele ja esta bloqueado no .gitignore).
 
-4. ENTRAR NO CHATGPT WEB
+4. USAR
 
-No mesmo perfil, abra https://chatgpt.com/ e entre na conta (uma vez).
-
-5. USAR
-
-De dois cliques em abrir_separador.bat. Nao abre nenhuma interface: o
-terminal mostra cada etapa com o horario, por exemplo:
-  Captura + PDF em 1.2s; enviando ao ChatGPT.
-  ChatGPT: Anexando PDF ao ChatGPT.
-  Resposta do ChatGPT em 14.0s, salva em pdf/respostas/...
+De dois cliques em abrir_separador.bat e deixe a janela aberta. Quando a
+grade aparecer na tela, o terminal mostra cada etapa com o horario, por exemplo:
+  Captura + PDF em 3.7s; enviando a OpenAI.
+  OpenAI: 1207 tokens de entrada + 4 de saida.
+  Resposta da OpenAI em 2.0s, salva em pdf/respostas/...
   Resposta: 2,9 [Enter]
 
-Se o Chrome com a extensao nao estiver aberto, o programa o abre sozinho.
-A extensao abre uma aba nova do ChatGPT para cada PDF e a fecha depois de
-salvar a resposta. Se o ChatGPT falhar, o robo tira outra captura sozinho
-(ate 2 vezes seguidas). Se a grade nao for reconhecida, captura de novo.
+Nao mexa no mouse enquanto ele clica sozinho. Se a API falhar, o robo tira
+outra captura sozinho (ate 2 vezes seguidas). Se a grade nao for reconhecida,
+captura de novo. Qualquer grade 3x3 visivel na tela pode acionar o fluxo.
 
 Comandos no terminal:
   1,5,9 + Enter: responder manualmente
   p + Enter: nova captura
-  v + Enter: acionar o botao Verificar
-  s + Enter: parar o robo
-  Ctrl+C: encerrar o programa
+  v + Enter: acionar o botao de confirmar
+  s + Enter ou Ctrl+C: encerrar o programa
 
-6. ONDE OS ARQUIVOS FICAM
+5. ONDE OS ARQUIVOS FICAM
 
 pdf: PDFs gerados.  pdf\respostas: respostas em TXT.
 pdf\.fluxo.json: registro das tarefas; preserve esse arquivo.
-pdf\extensao_deepseek: arquivos da extensao (gerados pelo programa).
-tmp: trava para nao abrir o programa duas vezes.
+pdf\.programa.lock: trava para nao abrir o programa duas vezes.
 PDFs e TXTs antigos so sao removidos depois de salvar uma nova resposta.
 
-7. ATUALIZAR
+6. ATUALIZAR
 
 Encerre com Ctrl+C, substitua servidor_separador.py e os atalhos, preservando
-a pasta pdf, e abra de novo. Somente ao sair de uma versao anterior a 5.0.0:
-em chrome://extensions clique uma vez em recarregar na extensao.
+a pasta pdf e o chave_openai.txt, e abra de novo. Quem usava a extensao
+"PDF -> ChatGPT Web" pode remove-la em chrome://extensions: ela nao e mais usada.
 
-8. SE PARAR
+7. SE PARAR
 
-"Extensao ainda nao conectou": confira se ela esta ativa no perfil Default.
-Login solicitado: entre no ChatGPT na aba aberta pela extensao.
-Resposta fora do formato: confira o TXT e responda manualmente.
+O programa foi feito para ficar aberto muito tempo sem ninguem no terminal:
+"Chrome invisivel parou ...; abrindo de novo." e normal: ele se recupera
+sozinho. Avisos que pedem p voltam a vigiar sozinhos depois de 30 segundos.
+"O Chrome invisivel parou 3 vezes seguidas ... Feche e abra o programa.":
+o Chrome nao volta; feche a janela e abra abrir_separador.bat de novo.
+"Coloque a chave da OpenAI...": crie ou corrija o chave_openai.txt.
+"Vigiando a tela: ...": a grade ainda nao foi reconhecida; a linha diz o motivo.
 "O programa ja esta aberto em outro terminal": feche o outro terminal.
+Resposta fora do formato: confira o TXT e responda manualmente.
 
 VALIDACAO
 
-py test_fluxo.py, node test_extensao.js e node test_chatgpt_web.js usam
-somente dados inventados, inclusive um PDF gerado no Chrome invisivel.
-Nao houve teste com imagens privadas nem com o site real do ChatGPT.
-Mudancas no site do ChatGPT podem exigir ajustes na extensao.
+py test_fluxo.py usa somente dados inventados, inclusive telas e PDFs gerados
+no Chrome invisivel e uma API falsa local. Nao houve teste com imagens
+privadas nem com a API real.

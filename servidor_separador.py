@@ -1,52 +1,259 @@
 #!/usr/bin/env python3
-"""Programa unico, todo no terminal: captura -> PDF numerado -> ChatGPT Web -> TXT -> robo.
+"""Programa unico, todo no terminal: print da tela -> PDF numerado -> API da OpenAI -> TXT -> cliques.
 
-Nao abre interface. O PDF e gerado no proprio navegador do robo (Selenium), sem
-exibir nada; a extensao do Chrome envia o PDF ao ChatGPT Web e devolve a resposta.
-O servidor usa apenas a biblioteca padrao e escuta somente em 127.0.0.1.
+Nao abre interface nem servidor. A cada 5s tira um print da tela (so em memoria); ao achar a
+grade 3x3, gera o PDF numerado num Chrome invisivel (Selenium), envia a pagina numerada a API
+da OpenAI, grava a resposta em TXT e clica nos numeros com o mouse do Windows.
 """
 from __future__ import annotations
 import argparse
 import base64
 import copy
+import ctypes
 import hashlib
-import hmac
 import json
 import logging
 import os
 import queue
+import random
 import re
 import secrets
 import signal
+import struct
 import sys
 import threading
 import time
-import urllib.parse
-import webbrowser
+import urllib.error
+import urllib.request
+import zlib
 from pathlib import Path
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-APP_DIR = Path(__file__).resolve().parent
+# Como .exe (PyInstaller), __file__ aponta para a pasta temporaria: usa a pasta do proprio .exe.
+APP_DIR = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
 PDF_DIR = APP_DIR / "pdf"
 RESP_DIR = PDF_DIR / "respostas"
 STATE_PATH = PDF_DIR / ".fluxo.json"
-LEGACY_STATE_PATH = PDF_DIR / ".vigia_deepseek.json"
-CONFIG_PATH = PDF_DIR / "extensao_deepseek" / "config_local.js"
-PROFILE_DIRECTORY = "Default"
-MAX_PDF = MAX_PAYLOAD = 20 * 1024 * 1024
+LOCK_PATH = PDF_DIR / ".programa.lock"
+MAX_PDF = 20 * 1024 * 1024
 MAX_RESULT = 5 * 1024 * 1024
-MAX_ESPERA = 25
 LOCK = threading.RLock()
-NOVA_TAREFA = threading.Condition(LOCK)
 logger = logging.getLogger("separador")
-PROVIDER = "chatgpt_web"
-VERSAO = "5.0.0"
-SECRET = ""
-ENGINE = ROBOT = None
+PROVIDER = "openai_api"
+VERSAO = "6.0.0"
+# Print da tela inteira a cada 5s, sem navegar a nenhum site.
+INTERVALO_TELA = 5.0
+# 0 = fica vigilante enquanto o programa estiver aberto.
+TELA_TIMEOUT = 0.0
+ENGINE = ROBOT = API = None
+# A chave da OpenAI e obrigatoria: o programa so responde pela API.
+CHAVE_PATH = APP_DIR / "chave_openai.txt"
+OPENAI_URL = "https://api.openai.com/v1/responses"
+MODELO_PADRAO = "gpt-4.1"
+# O modelo tendia a marcar imagens a mais: o pedido deixa claro que pode ser so uma.
+PROMPT_API = ("A imagem traz um desafio: o cabecalho no topo diz o que procurar e as 9 imagens abaixo "
+              "estao numeradas de 1 a 9. Examine cada imagem separadamente e escolha somente as que "
+              "atendem exatamente ao pedido do cabecalho. Pode ser apenas uma imagem; nao inclua imagens "
+              "apenas parecidas ou duvidosas. Responda somente com os numeros escolhidos, em ordem "
+              "crescente, separados por virgula, sem nenhum outro texto.")
+
+
+def primeira_linha(error):
+    """So a primeira linha de um erro (as do Selenium trazem pilhas enormes)."""
+    return (str(error).strip().splitlines() or ["erro"])[0]
 
 
 def log(message):
     print(time.strftime("[%H:%M:%S] ") + message, flush=True)
+
+
+_DPI_AWARENESS = False
+
+
+def _preparar_dpi():
+    """Ajusta a nocao de DPI uma unica vez (importante com mais de um monitor)."""
+    global _DPI_AWARENESS
+    if _DPI_AWARENESS:
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # por monitor
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    _DPI_AWARENESS = True
+
+
+def chunk_png(kind, data):
+    """Bloco PNG com CRC, calculado somente com a biblioteca padrao."""
+    return (struct.pack(">I", len(data)) + kind + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+
+
+def scanlines_de_bgra(raw, width, height):
+    """Converte o buffer BGRA do Windows em scanlines RGB com filtro 0."""
+    stride = width * 4
+    scan = bytearray(height * (1 + width * 3))
+    for row in range(height):
+        origem = row * stride
+        destino = row * (1 + width * 3)
+        linha = raw[origem:origem + stride]
+        rgb = bytearray(width * 3)
+        rgb[0::3] = linha[2::4]
+        rgb[1::3] = linha[1::4]
+        rgb[2::3] = linha[0::4]
+        scan[destino] = 0  # filtro PNG
+        scan[destino + 1:destino + 1 + width * 3] = rgb
+    return bytes(scan)
+
+
+def codificar_png(scan, width, height):
+    """Monta um PNG RGB de 8 bits a partir das scanlines (sem PIL)."""
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk_png(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            # Nivel 1: prints de tela comprimem quase igual e bem mais rapido que o nivel 6.
+            + chunk_png(b"IDAT", zlib.compress(scan, 1))
+            + chunk_png(b"IEND", b""))
+
+
+_GDI = None
+# Ultima print codificada: tela sem mudanca reaproveita o PNG em vez de recodificar.
+_ULTIMA_TELA = (None, b"")
+
+
+def _gdi():
+    """Prepara as funcoes do Windows uma unica vez (tipos de 64 bits corretos)."""
+    global _GDI
+    if _GDI is not None:
+        return _GDI
+    from ctypes import wintypes
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD)]
+
+    user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.GetDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.ReleaseDC.restype = wintypes.BOOL
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.BitBlt.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                             wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD]
+    gdi32.BitBlt.restype = wintypes.BOOL
+    gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                                wintypes.LPVOID, ctypes.POINTER(BITMAPINFOHEADER), wintypes.UINT]
+    gdi32.GetDIBits.restype = wintypes.UINT
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.DeleteDC.restype = wintypes.BOOL
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
+    _GDI = (user32, gdi32, BITMAPINFOHEADER)
+    return _GDI
+
+
+def png_tela():
+    """Print da tela virtual inteira; devolve (png, offset_x, offset_y)."""
+    global _ULTIMA_TELA
+    if os.name != "nt":
+        raise RuntimeError("O modo tela so funciona no Windows.")
+    _preparar_dpi()
+    user32, gdi32, BITMAPINFOHEADER = _gdi()
+    # 76..79: origem e tamanho da area virtual (cobre varios monitores).
+    ox, oy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+    width, height = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Nao consegui medir a tela; verifique os monitores.")
+    hdc = hdc_mem = bitmap = antigo = None
+    try:
+        hdc = user32.GetDC(0)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc)
+        bitmap = gdi32.CreateCompatibleBitmap(hdc, width, height)
+        if not hdc or not hdc_mem or not bitmap:
+            raise RuntimeError("Falha ao preparar a captura da tela.")
+        antigo = gdi32.SelectObject(hdc_mem, bitmap)
+        if not gdi32.BitBlt(hdc_mem, 0, 0, width, height, hdc, ox, oy, 0x00CC0020):
+            raise RuntimeError("Falha ao copiar a tela (BitBlt).")
+        info = BITMAPINFOHEADER()
+        info.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        info.biWidth, info.biHeight = width, -height  # top-down: primeira linha no topo
+        info.biPlanes, info.biBitCount = 1, 32
+        pixels = ctypes.create_string_buffer(width * height * 4)
+        if not gdi32.GetDIBits(hdc, bitmap, 0, height, pixels, ctypes.byref(info), 0):
+            raise RuntimeError("Falha ao ler os pixels da tela (GetDIBits).")
+        raw = pixels.raw
+        del pixels
+    finally:
+        if antigo:
+            gdi32.SelectObject(hdc_mem, antigo)
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if hdc_mem:
+            gdi32.DeleteDC(hdc_mem)
+        if hdc:
+            user32.ReleaseDC(0, hdc)
+    # Codifica so depois de liberar os recursos do Windows, e so se a tela mudou.
+    chave = (width, height, hashlib.sha256(raw).digest())
+    if _ULTIMA_TELA[0] != chave:
+        _ULTIMA_TELA = (chave, codificar_png(scanlines_de_bgra(raw, width, height), width, height))
+    return _ULTIMA_TELA[1], ox, oy
+
+
+def clique_humano(x, y, stop_event):
+    """Move o cursor com pausas curtas e clica como uma pessoa (somente Windows)."""
+    if os.name != "nt":
+        raise RuntimeError("Os cliques simulados so funcionam no Windows.")
+    from ctypes import wintypes
+
+    try:
+        x, y = int(x), int(y)
+    except (TypeError, ValueError):
+        raise ValueError("Coordenada de clique invalida: (%r, %r)." % (x, y)) from None
+    user32 = ctypes.windll.user32
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
+    user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+    user32.GetCursorPos.restype = wintypes.BOOL
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SetCursorPos.restype = wintypes.BOOL
+    user32.mouse_event.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                   ctypes.c_void_p]
+    user32.mouse_event.restype = None
+    origem_x, origem_y = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+    largura, altura = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+    if not (origem_x <= x < origem_x + largura and origem_y <= y < origem_y + altura):
+        raise ValueError("Coordenada de clique fora da tela: (%s, %s)." % (x, y))
+    ponto = wintypes.POINT()
+    if stop_event.is_set():
+        return
+    if not user32.GetCursorPos(ctypes.byref(ponto)):
+        raise RuntimeError("Falha ao consultar a posicao do cursor.")
+    passos = 6
+    for indice in range(1, passos + 1):
+        px = round(ponto.x + (x - ponto.x) * indice / passos)
+        py = round(ponto.y + (y - ponto.y) * indice / passos)
+        if not user32.SetCursorPos(px, py):
+            raise RuntimeError("Falha ao mover o cursor para (%s, %s)." % (px, py))
+        if stop_event.wait(random.uniform(0.02, 0.12)):
+            return
+    if stop_event.is_set():
+        return
+    user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+    try:
+        stop_event.wait(random.uniform(0.04, 0.10))
+    finally:
+        user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
 
 
 # Deteccao da grade, recortes, numeracao e PDF (mesma logica da antiga pagina).
@@ -237,7 +444,14 @@ function detectBestGrid(gray, aw, ah, opt, scale) {
     [opt.whiteThr, gap, 0.985],
     [opt.whiteThr, thinGap, 0.84]
   ];
-  if (opt.whiteThr === 244) attempts.push([230, thinGap, 0.84]);
+  if (opt.whiteThr === 244) {
+    // Imagens claras (fotos com fundo quase branco) somem com o limite padrao.
+    attempts.push([230, thinGap, 0.84],
+                  [250, gap, 0.985], [250, thinGap, 0.84], [252, thinGap, 0.84]);
+    // Divisorias cinza claro (escala da tela) exigem um limite mais baixo.
+    attempts.push([210, thinGap, 0.84], [200, gap, 0.985],
+                  [200, thinGap, 0.84], [190, thinGap, 0.84], [180, thinGap, 0.84]);
+  }
   let grid = null;
   for (const [threshold, minGap, coverage] of attempts) {
     const candidate = findGrid(gray, aw, ah, threshold, minGap, coverage);
@@ -433,657 +647,325 @@ const fonte = arguments[0], concluir = arguments[arguments.length - 1];
     const pdf = new Uint8Array(await makePdf([{width: canvas.width, height: canvas.height, jpeg}]).arrayBuffer());
     let binary = "";
     for (let i = 0; i < pdf.length; i += 32768) binary += String.fromCharCode.apply(null, pdf.subarray(i, i + 32768));
-    return {ok: true, pdf: btoa(binary), completada};
+    let foto = "";
+    for (let i = 0; i < jpeg.length; i += 32768) foto += String.fromCharCode.apply(null, jpeg.subarray(i, i + 32768));
+    return {ok: true, pdf: btoa(binary), jpeg: btoa(foto), completada};
   } finally { image.close(); }
 })().then(concluir, error => concluir({ok: false, message: String((error && error.message) || error)}));
 '''
 
-EXT_BACKGROUND = r'''"use strict";
-importScripts("config_local.js");
-const PORTS = Array.from({length: 20}, (_, index) => 8765 + index);
-const PROMPT = "Responda ao PDF anexado seguindo as instruções contidas nele. Preserve a numeração solicitada. Não faça pesquisas na web.";
-const PROVIDER = "chatgpt_web";
-const ESPERA = 20;
-const result = (ok, code, message) => ({servidor: "separador", ok, code, message});
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const taskKey = id => "chatgpt-task-" + id;
-let busy = false, looping = false, base = "", lastProgress = "";
-
-function validBase(value) {
-  return typeof value === "string" && /^http:\/\/127\.0\.0\.1:\d{4,5}$/.test(value);
-}
-async function probe(candidate) {
-  const response = await fetch(candidate + "/api/status", {signal: AbortSignal.timeout(1500)});
-  const value = await response.json();
-  return response.ok && value.ok && value.servidor === "separador" && value.provedor === PROVIDER;
-}
-async function findBase() {
-  if (validBase(base)) return base;
-  const attempts = await Promise.allSettled(PORTS.map(async port => {
-    const candidate = "http://127.0.0.1:" + port;
-    if (await probe(candidate)) return candidate;
-    throw Error("nao e o separador");
-  }));
-  const found = attempts.find(item => item.status === "fulfilled");
-  if (!found) throw Error("Programa local fechado. Abra abrir_separador.bat.");
-  base = found.value;
-  return base;
-}
-async function api(path, data, timeout = 15000) {
-  for (let attempt = 0; ; attempt++) {
-    const root = await findBase();
-    let response;
-    try {
-      response = await fetch(root + path, {
-        method: data ? "POST" : "GET",
-        headers: {"X-Vigia-Token": VIGIA_TOKEN, "X-Vigia-Provider": PROVIDER, "X-Vigia-Extension": chrome.runtime.id,
-          "X-Vigia-Version": chrome.runtime.getManifest().version, ...(data ? {"Content-Type": "application/json"} : {})},
-        body: data ? JSON.stringify(data) : undefined,
-        signal: AbortSignal.timeout(timeout)
-      });
-    } catch (error) {
-      base = "";
-      if (attempt >= 1) throw error;
-      continue;
-    }
-    const value = await response.json();
-    if (value.provedor !== PROVIDER) throw Error("Reinicie o programa atualizado para usar o ChatGPT Web.");
-    if (!response.ok || !value.ok) throw Error(value.message || "Falha no fluxo local.");
-    return value;
+# Botao de confirmar (sem OCR): o maior bloco colorido e largo logo abaixo da grade, do meio
+# para a direita. gx0/gx1: bordas da grade; gy1: base da ultima linha; passo: distancia entre
+# centros. Ignora blocos que encostam na grade (pedacos das fotos). Devolve [x, y] ou null.
+ACHAR_BOTAO_JS = r'''
+function acharBotao(image, gx0, gx1, gy1, passo) {
+  const limitar = (v, a, b) => Math.max(a, Math.min(b, v));
+  const bx0 = limitar(Math.floor(gx0 + (gx1 - gx0) * 0.3), 0, image.width - 1);
+  const bx1 = limitar(Math.ceil(gx1 + passo * 0.5), bx0 + 1, image.width);
+  const by0 = limitar(Math.floor(gy1 + 2), 0, image.height - 1);
+  const by1 = limitar(Math.ceil(gy1 + passo * 1.1), by0 + 1, image.height);
+  const bw = bx1 - bx0, bh = by1 - by0;
+  if (bh <= 4) return null;
+  const area = document.createElement("canvas");
+  area.width = bw; area.height = bh;
+  const actx = area.getContext("2d", {willReadFrequently: true});
+  actx.drawImage(image, bx0, by0, bw, bh, 0, 0, bw, bh);
+  const px = actx.getImageData(0, 0, bw, bh).data;
+  const cor = new Uint8Array(bw * bh);
+  for (let i = 0, p = 0; p < cor.length; i += 4, p++) {
+    const alto = Math.max(px[i], px[i + 1], px[i + 2]), baixo = Math.min(px[i], px[i + 1], px[i + 2]);
+    cor[p] = alto - baixo >= 60 && alto >= 80 ? 1 : 0;
   }
-}
-async function badge(text, title) {
-  await chrome.action.setBadgeText({text});
-  await chrome.action.setTitle({title});
-}
-async function tabAlive(id) {
-  if (typeof id !== "number") return false;
-  try { await chrome.tabs.get(id); return true; } catch { return false; }
-}
-async function ownedTab(job) {
-  const saved = (await chrome.storage.local.get(taskKey(job.id)))[taskKey(job.id)];
-  return saved?.tabId === job.tabId && await tabAlive(job.tabId);
-}
-async function preparing(job, message) {
-  await badge("…", message);
-  if (message === lastProgress) return;
-  lastProgress = message;
-  await api("/api/vigia/progress", {id: job.id, message}).catch(() => {});
-}
-async function connectTab(job) {
-  const ping = result(true, "PING", "Verificar ChatGPT.");
-  try { return await chrome.tabs.sendMessage(job.tabId, ping); } catch {}
-  if (!(await ownedTab(job))) throw Error("A aba nao pertence a esta tarefa.");
-  const tab = await chrome.tabs.get(job.tabId);
-  if (!tab.url?.startsWith("https://chatgpt.com/")) throw Error("Aguardando a aba terminar de abrir o ChatGPT.");
-  // Recupera uma aba que abriu antes de o script da extensao estar disponivel.
-  await chrome.scripting.executeScript({target: {tabId: job.tabId}, files: ["chatgpt.js"]});
-  return await chrome.tabs.sendMessage(job.tabId, ping);
-}
-async function openTab() {
-  const url = "https://chatgpt.com/";
-  const windows = await chrome.windows.getAll({windowTypes: ["normal"]});
-  windows.sort((a, b) => Number(!!b.focused) - Number(!!a.focused));
-  for (const window of windows) {
-    // Aba ativa: o Chrome nao desacelera o script nem a renderizacao da resposta.
-    try { return await chrome.tabs.create({windowId: window.id, url, active: true}); } catch {}
+  const pilha = new Int32Array(bw * bh);
+  let melhor = null;
+  for (let inicio = 0; inicio < cor.length; inicio++) {
+    if (cor[inicio] !== 1) continue;
+    let topo = 0, total = 0, x0 = bw, x1 = 0, y0 = bh, y1 = 0;
+    cor[inicio] = 2; pilha[topo++] = inicio;
+    while (topo) {
+      const p = pilha[--topo], x = p % bw, y = (p - x) / bw;
+      total++;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      if (x > 0 && cor[p - 1] === 1) { cor[p - 1] = 2; pilha[topo++] = p - 1; }
+      if (x < bw - 1 && cor[p + 1] === 1) { cor[p + 1] = 2; pilha[topo++] = p + 1; }
+      if (y > 0 && cor[p - bw] === 1) { cor[p - bw] = 2; pilha[topo++] = p - bw; }
+      if (y < bh - 1 && cor[p + bw] === 1) { cor[p + bw] = 2; pilha[topo++] = p + bw; }
+    }
+    const lw = x1 - x0 + 1, lh = y1 - y0 + 1;
+    if (y0 === 0 || lw < passo * 0.35 || lh < passo * 0.12 || lh > passo * 0.7 || lw < lh * 1.5) continue;
+    if (total < lw * lh * 0.4) continue;
+    if (!melhor || lw * lh > melhor.area) {
+      melhor = {area: lw * lh, x: bx0 + (x0 + x1 + 1) / 2, y: by0 + (y0 + y1 + 1) / 2};
+    }
   }
-  // Nunca cria uma janela do Chrome: o programa abre o Chrome quando necessario.
-  return null;
+  return melhor && [Math.round(melhor.x), Math.round(melhor.y)];
 }
-async function checkVersion(value) {
-  // Depois de atualizar o programa, recarrega a extensao sozinha (somente sem tarefa ativa).
-  const wanted = value.extensao_versao;
-  if (!wanted || wanted === chrome.runtime.getManifest().version) return;
-  const last = (await chrome.storage.local.get("reload-at"))["reload-at"] || 0;
-  if (Date.now() - last < 60000) return;
-  await chrome.storage.local.set({"reload-at": Date.now()});
-  chrome.runtime.reload();
-}
-
-async function tick(espera = 0) {
-  if (busy) return "busy";
-  busy = true;
-  let job, fatal = false;
-  try {
-    const next = await api("/api/vigia/next" + (espera ? "?espera=" + espera : ""), null, (espera + 10) * 1000);
-    job = next.job;
-    if (job && job.provider !== PROVIDER) throw Error("Tarefa de outra versao. Reinicie o programa atualizado.");
-    if (!job) {
-      await badge("", "Fluxo PDF: aguardando um PDF novo.");
-      await checkVersion(next);
-      return "idle";
-    }
-    if (job.status === "aguardando") {
-      if (!(await ownedTab(job))) {
-        fatal = true;
-        throw Error("A aba do ChatGPT foi fechada antes da resposta. O PDF pode já ter sido recebido.");
-      }
-      try {
-        await connectTab(job);
-        const resumed = await chrome.tabs.sendMessage(job.tabId, {
-          ...result(true, "RESUME", "Retomar coleta sem reenviar PDF."), provider: PROVIDER, id: job.id, prompt: PROMPT
-        });
-        if (resumed?.code !== "BUSY") await preparing(job, resumed?.message || "Aguardando resposta na aba da tarefa.");
-      } catch {
-        await preparing(job, "Coleta desconectada. Mantenha a aba da tarefa aberta; a coleta sera retomada sem reenviar o PDF.");
-      }
-      return "wait";
-    }
-    // Nada foi enviado ainda: se a aba sumiu, basta abrir outra.
-    if (job.status === "preparando" && !(await ownedTab(job))) job = {...job, status: "fila"};
-    if (job.status === "fila") {
-      const saved = (await chrome.storage.local.get(taskKey(job.id)))[taskKey(job.id)];
-      const tab = saved && await tabAlive(saved.tabId) ? {id: saved.tabId} : await openTab();
-      if (!tab?.id) { await badge("…", "PDF na fila: abra uma janela do Chrome."); return "wait"; }
-      await chrome.storage.local.set({[taskKey(job.id)]: {tabId: tab.id}});
-      await chrome.tabs.update(tab.id, {autoDiscardable: false});
-      await api("/api/vigia/opened", {id: job.id, tabId: tab.id});
-      job = {...job, status: "preparando", tabId: tab.id};
-    }
-    let ready;
-    try {
-      ready = await connectTab(job);
-    } catch {
-      await preparing(job, "Abrindo o ChatGPT na aba da tarefa.");
-      return "wait";
-    }
-    if (!ready?.ok || ready.provider !== PROVIDER) {
-      await preparing(job, ready?.message || "Campo de mensagem indisponivel. Entre na conta do ChatGPT na aba aberta.");
-      return "wait";
-    }
-    fatal = true;
-    const payload = await api("/api/vigia/payload", {id: job.id});
-    await api("/api/vigia/dispatch", {id: job.id});
-    const accepted = await chrome.tabs.sendMessage(job.tabId, {
-      ...result(true, "PROCESS", "Processar PDF."), provider: PROVIDER, id: job.id, name: payload.name,
-      data: payload.data, prompt: PROMPT
-    });
-    if (!accepted?.ok) throw Error(accepted?.message || "O envio não foi confirmado.");
-    await badge("…", "ChatGPT processando o PDF.");
-    return "wait";
-  } catch (error) {
-    // Problemas passageiros antes do envio so tentam de novo; depois do envio, registra a falha.
-    if (job && fatal) try { await api("/api/vigia/error", {id: job.id, message: error.message}); } catch {}
-    await badge("!", "Fluxo: " + error.message).catch(() => {});
-    return "error";
-  } finally {
-    busy = false;
-  }
-}
-
-// Fila sem atraso: o servidor segura o pedido ate surgir um PDF (long-poll).
-async function loop() {
-  if (looping) return;
-  looping = true;
-  let failures = 0;
-  try {
-    while (failures < 10) {
-      // Chamar uma API da extensao mantem o service worker acordado.
-      await chrome.runtime.getPlatformInfo();
-      const state = await tick(ESPERA);
-      failures = state === "error" ? failures + 1 : 0;
-      if (state !== "idle") await sleep(state === "error" ? 3000 : 700);
-    }
-  } finally { looping = false; }
-}
-
-chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id !== chrome.runtime.id || message?.servidor !== "separador" ||
-      !sender.tab || !sender.url?.startsWith("https://chatgpt.com/")) return;
-  (async () => {
-    if (message.code === "RESULT") {
-      if (message.provider !== PROVIDER || !(await ownedTab({id: message.id, tabId: sender.tab.id}))) {
-        respond(result(false, "NOT_ACTIVE", "A aba nao pertence a esta tarefa."));
-        return;
-      }
-      // O servidor confere tarefa + aba e nunca grava a mesma resposta duas vezes.
-      const saved = await api("/api/vigia/result", {id: message.id, tabId: sender.tab.id, text: message.text});
-      respond(saved);
-      await chrome.tabs.remove(sender.tab.id).catch(() => {});
-      await chrome.storage.local.remove(taskKey(message.id));
-      void loop();
-      return;
-    }
-    const job = (await api("/api/vigia/next")).job;
-    if (message.provider !== PROVIDER || !job || job.id !== message.id || job.tabId !== sender.tab.id || !(await ownedTab(job))) {
-      respond(result(false, "NOT_ACTIVE", "Tarefa não está ativa."));
-      return;
-    }
-    if (message.code === "ERROR") {
-      await api("/api/vigia/error", {id: job.id, message: message.message});
-      respond(result(true, "ACK", "Falha registrada; PDF preservado."));
-      await badge("!", "Um PDF falhou. Os próximos continuam automaticamente.");
-      return;
-    }
-    if (message.code === "PROGRESS") {
-      lastProgress = String(message.message || "");
-      try { await api("/api/vigia/progress", {id: message.id, message: message.message}); } catch {}
-      respond(result(true, "ACK", "Processamento em andamento."));
-    }
-  })().catch(error => respond(result(false, "FAILED", error.message)));
-  return true;
-});
-
-async function forgetTabs() {
-  // Ids de abas nao valem depois que o Chrome reinicia.
-  const values = await chrome.storage.local.get(null);
-  const keys = Object.keys(values).filter(key => key.startsWith("chatgpt-task-"));
-  if (keys.length) await chrome.storage.local.remove(keys);
-}
-async function initialize() {
-  await chrome.alarms.create("fluxo-check", {periodInMinutes: 0.5});
-  void loop();
-}
-chrome.runtime.onInstalled.addListener(() => void initialize());
-chrome.runtime.onStartup.addListener(() => void forgetTabs().finally(initialize));
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === "fluxo-check") void loop(); });
-chrome.windows.onCreated.addListener(() => void loop());
-chrome.tabs.onUpdated.addListener((_id, change, tab) => {
-  if (change.status === "complete" && tab.url?.startsWith("https://chatgpt.com/")) void loop();
-});
-chrome.action.onClicked.addListener(() => void loop());
-void initialize();
 '''
 
-EXT_CHATGPT = r'''"use strict";
-(() => {
-  if (globalThis.__separadorChatgptLoaded) return;
-  globalThis.__separadorChatgptLoaded = true;
-  const APP = "separador", PROVIDER = "chatgpt_web";
-  const reply = (ok, code, message, extra = {}) => ({servidor: APP, ok, code, message, ...extra});
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  let running = false, current = null;
-  const visible = node => !!node && node.isConnected && !node.hidden && node.getClientRects().length > 0;
-  const textOf = node => (node?.innerText || node?.textContent || "").trim();
-  const normalized = text => String(text || "").replace(/\s+/g, " ").trim();
-  const REASONING = '[data-message-type="reasoning"], [data-testid*="reasoning"], [data-testid*="thinking"]';
-  const USER = '[data-message-author-role="user"], article[data-turn="user"]';
-  function sentPrompt(prompt) {
-    return Array.from(document.querySelectorAll(USER)).some(node => normalized(textOf(node)).includes(normalized(prompt)));
-  }
-  function editor() {
-    const primary = Array.from(document.querySelectorAll('#prompt-textarea, [data-testid="prompt-textarea"]')).find(visible);
-    if (primary) return primary;
-    const scope = document.querySelector("main") || document;
-    return Array.from(scope.querySelectorAll('textarea[placeholder], [contenteditable="true"][role="textbox"], .ProseMirror[contenteditable="true"], [contenteditable="true"][data-lexical-editor], [contenteditable="true"][data-slate-editor]'))
-      .find(node => visible(node) && !node.disabled && node.getAttribute("aria-disabled") !== "true") || null;
-  }
-  const draftOf = input => input?.tagName === "TEXTAREA" ? input.value : textOf(input);
-  const SEND_SELECTOR = 'button[data-testid="send-button"], button#composer-submit-button, button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="Send"], button[aria-label="Enviar mensagem"], button[aria-label="Enviar prompt"], button[aria-label="Enviar"]';
-  function composer() {
-    const input = editor();
-    if (!input) return null;
-    // O editor pode estar em um bloco interno, separado do botao e do anexo.
-    const form = input.closest("form");
-    if (form) return form;
-    let scope = input.closest('[data-type="unified-composer"], [data-testid="composer"]') || input.parentElement;
-    const fallback = scope;
-    for (let depth = 0; scope && depth < 5; depth++, scope = scope.parentElement) {
-      if (scope.matches("main, body, html")) break;
-      if (scope.querySelector(SEND_SELECTOR)) return scope;
+# Localiza a grade no print da tela inteira e devolve so o retangulo do desafio.
+# O recorte volta para GERAR_PDF_JS, que continua gerando o PDF como antes.
+LOCALIZAR_JS = r'''
+const fonte = arguments[0], concluir = arguments[arguments.length - 1];
+(async () => {
+  "use strict";
+''' + NUCLEO_JS + ACHAR_BOTAO_JS + r'''
+  const OPCOES = {whiteThr: 244, gapMin: 5};
+  const e3x3 = result => !result.error && result.rows === 3 && result.cols === 3;
+
+  // Regioes quase brancas e conectadas (como o painel do desafio), da maior para a menor.
+  // Servem quando a tela inteira tem outro monitor, janela escura ou fundo escurecido ao lado.
+  function regioesBrancas(image) {
+    const escala = Math.min(1, 800 / Math.max(image.width, image.height));
+    const w = Math.max(1, Math.round(image.width * escala)), h = Math.max(1, Math.round(image.height * escala));
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d", {willReadFrequently: true});
+    ctx.drawImage(image, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const livre = new Uint8Array(w * h);
+    for (let i = 0, p = 0; p < livre.length; i += 4, p++) {
+      livre[p] = data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114 >= 230000 ? 1 : 0;
     }
-    return fallback;
-  }
-  function fileInputs() {
-    // Campos que aceitam PDF; os da caixa de mensagem primeiro.
-    const box = composer();
-    return Array.from(document.querySelectorAll('input[type="file"]')).filter(node => {
-      const accept = (node.getAttribute("accept") || "").toLowerCase();
-      return !node.disabled && (!accept || accept.includes(".pdf") || accept.includes("application/pdf") ||
-        accept.includes("application/*") || accept === "*" || accept.includes("*/*"));
-    }).sort((a, b) => Number(!!box?.contains(b)) - Number(!!box?.contains(a)));
-  }
-  const fileInput = () => fileInputs()[0] || null;
-  function disabled(node) {
-    return !node || node.disabled || node.getAttribute("aria-disabled") === "true";
-  }
-  function sendButton() {
-    const scope = composer();
-    const buttons = scope ? Array.from(scope.querySelectorAll(SEND_SELECTOR)).filter(visible) : [];
-    return buttons.find(node => !disabled(node)) || buttons[0] || null;
-  }
-  function generating() {
-    return Array.from(document.querySelectorAll('button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"], button[aria-label="Parar de gerar"], button[aria-label="Parar geração"], button[aria-label="Interromper"], [data-is-streaming="true"], .result-streaming')).some(visible);
-  }
-  function assistantMessages() {
-    return Array.from(document.querySelectorAll('[data-message-author-role="assistant"], article[data-turn="assistant"]'))
-      .filter(node => visible(node) && !node.querySelector('[data-message-author-role="assistant"]'));
-  }
-  const CONTROLS = 'button[data-testid="copy-turn-action-button"], button[data-testid="good-response-turn-action-button"], button[data-testid="bad-response-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copiar"], button[aria-label="Copy response"], button[aria-label="Copiar resposta"], button[title="Copy"], button[title="Copiar"]';
-  // Barra de acoes da resposta (copiar, curtir...), mesmo que o ChatGPT mude os atributos.
-  function actionButtons() {
-    const scope = document.querySelector?.("main") || document.body || document;
-    return Array.from(scope.querySelectorAll("button")).filter(node => visible(node) && (node.matches(CONTROLS) ||
-      /^(copy|copiar|good response|bad response|boa resposta|resposta ruim|read aloud|ler em voz alta)/i.test(node.getAttribute("aria-label") || "")));
-  }
-  function cleanText(node) {
-    const clone = node.cloneNode(true);
-    clone.querySelectorAll(REASONING + ', button, nav, [role="toolbar"], script, style').forEach(item => item.remove());
-    return textOf(clone);
-  }
-  function answerByControls(prompt) {
-    // Sobe a partir da ultima barra de acoes ate o primeiro bloco com texto; nunca usa o bloco do prompt.
-    const button = actionButtons().at(-1);
-    const stop = document.querySelector?.("main") || document.body;
-    for (let node = button?.parentElement; node && node !== stop; node = node.parentElement) {
-      const text = cleanText(node);
-      if (!text) continue;
-      // Bloco da mensagem enviada (prompt ou nome do PDF): ainda nao ha resposta.
-      if ((prompt && normalized(text).includes(normalized(prompt))) || /\.pdf\b/i.test(text)) return null;
-      return {text, finished: !generating()};
+    const pilha = new Int32Array(w * h), minimo = 100 * escala, regioes = [];
+    for (let inicio = 0; inicio < livre.length; inicio++) {
+      if (livre[inicio] !== 1) continue;
+      let topo = 0, x0 = w, x1 = 0, y0 = h, y1 = 0;
+      livre[inicio] = 2; pilha[topo++] = inicio;
+      while (topo) {
+        const p = pilha[--topo], x = p % w, y = (p - x) / w;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        if (x > 0 && livre[p - 1] === 1) { livre[p - 1] = 2; pilha[topo++] = p - 1; }
+        if (x < w - 1 && livre[p + 1] === 1) { livre[p + 1] = 2; pilha[topo++] = p + 1; }
+        if (y > 0 && livre[p - w] === 1) { livre[p - w] = 2; pilha[topo++] = p - w; }
+        if (y < h - 1 && livre[p + w] === 1) { livre[p + w] = 2; pilha[topo++] = p + w; }
+      }
+      if (x1 - x0 + 1 < minimo || y1 - y0 + 1 < minimo) continue;
+      const x = clamp(Math.floor((x0 - 1) / escala), 0, image.width - 1);
+      const y = clamp(Math.floor((y0 - 1) / escala), 0, image.height - 1);
+      const right = clamp(Math.ceil((x1 + 2) / escala), x + 1, image.width);
+      const bottom = clamp(Math.ceil((y1 + 2) / escala), y + 1, image.height);
+      // A tela inteira ja foi analisada; nao repete a mesma area.
+      if ((right - x) * (bottom - y) >= image.width * image.height * 0.97) continue;
+      regioes.push({x, y, w: right - x, h: bottom - y});
     }
-    return null;
+    return regioes.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 8);
   }
-  // Mensagem enviada: aparece no historico, a conversa ganhou endereco, a geracao comecou
-  // ou a caixa esvaziou e o anexo saiu dela.
-  function messageSent(prompt, name) {
-    return sentPrompt(prompt) || /^\/c\//.test(location.pathname || "") || generating() ||
-      (!!editor() && !draftOf(editor()).trim() && !!name && !attachmentPresent(name));
-  }
-  function lastMarkdown(prompt) {
-    // Ultimo bloco de texto formatado da pagina que nao seja a mensagem enviada.
-    const scope = document.querySelector?.("main") || document.body;
-    const blocks = scope ? Array.from(scope.querySelectorAll(".markdown")).filter(node => visible(node) && !node.closest(REASONING)) : [];
-    const node = blocks.at(-1);
-    if (!node || node.closest(USER)) return null;
-    const text = textOf(node);
-    if (!text || (prompt && normalized(text).includes(normalized(prompt)))) return null;
-    return node;
-  }
-  const NUMERICA = /^[1-9](?:\s*[,;]?\s*[1-9])*\.?$/;
-  function numericAnswer() {
-    // Procura pelo formato (1 a 9 separados por virgula), sem depender dos atributos da pagina.
-    // So dentro da conversa (main); ignora a caixa de mensagem e a barra lateral.
-    const scope = document.querySelector?.("main") || document.body;
-    if (!scope) return null;
-    const box = composer();
-    const own = node => (node.textContent || "").trim();
-    const found = Array.from(scope.querySelectorAll("div, p, span, li, strong, code")).filter(node =>
-      NUMERICA.test(own(node)) && visible(node) && !box?.contains(node) &&
-      !node.closest('[contenteditable="true"], textarea, button, nav, aside, ' + USER) &&
-      !Array.from(node.children).some(child => own(child) === own(node)));
-    const node = found.at(-1);
-    return node ? {text: own(node), finished: false} : null;
-  }
-  function finalAnswer() {
-    const message = assistantMessages().at(-1) || lastMarkdown(current?.prompt);
-    if (!message) return numericAnswer() || answerByControls(current?.prompt);
-    if (message.closest(REASONING)) return null;
-    const markdown = Array.from(message.querySelectorAll(".markdown"));
-    const candidates = markdown.length ? markdown : Array.from(message.querySelectorAll('[data-testid="message-content"], [data-message-content], .prose'));
-    const blocks = candidates.filter(node => visible(node) &&
-      !node.closest(REASONING) && !node.querySelector(REASONING) &&
-      !candidates.some(parent => parent !== node && parent.contains(node)));
-    let text = blocks.map(textOf).filter(Boolean).join("\n").trim();
-    if (!text && !candidates.length) {
-      // Respostas simples podem nao ter markdown; exclui controles e pensamento.
-      text = cleanText(message);
+
+  // As fotos do desafio como 9 blocos nao brancos, quase quadrados, do mesmo tamanho, em 3x3 e
+  // com vaos estreitos. Acha a grade mesmo com a pagina branca ao redor e outros conteudos
+  // (ou outro monitor) na mesma altura. Recusa pedacos de grades maiores (3x4, 4x4...).
+  function gradePorBlocos(image) {
+    const escala = Math.min(1, Math.sqrt(4e6 / (image.width * image.height)));
+    const w = Math.max(1, Math.round(image.width * escala)), h = Math.max(1, Math.round(image.height * escala));
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d", {willReadFrequently: true});
+    ctx.drawImage(image, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+    // Tenta varios limites: fotos claras nao passam no limite escuro original.
+    const tentativas = [];
+    for (const corte of [240000, 250000, 253000]) {
+    const cheio = new Uint8Array(w * h);
+    for (let i = 0, p = 0; p < cheio.length; i += 4, p++) {
+      cheio[p] = data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114 < corte ? 1 : 0;
     }
-    if (!text) return null;
-    const turn = message.closest('[data-testid^="conversation-turn-"], article') || message;
-    // A barra de acoes pode ficar dentro do bloco ou logo depois dele (interface nova).
-    const after = node => !!(message.compareDocumentPosition(node) & 4);
-    const finished = !generating() && (Array.from(turn.querySelectorAll(CONTROLS)).some(visible) || actionButtons().some(after));
-    return {text, finished};
+    const pilha = new Int32Array(w * h), blocos = [];
+    const minimo = Math.max(8, 40 * escala), maximo = Math.min(w, h) * 0.45;
+    for (let inicio = 0; inicio < cheio.length; inicio++) {
+      if (cheio[inicio] !== 1) continue;
+      let topo = 0, total = 0, x0 = w, x1 = 0, y0 = h, y1 = 0;
+      cheio[inicio] = 2; pilha[topo++] = inicio;
+      while (topo) {
+        const p = pilha[--topo], x = p % w, y = (p - x) / w;
+        total++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        if (x > 0 && cheio[p - 1] === 1) { cheio[p - 1] = 2; pilha[topo++] = p - 1; }
+        if (x < w - 1 && cheio[p + 1] === 1) { cheio[p + 1] = 2; pilha[topo++] = p + 1; }
+        if (y > 0 && cheio[p - w] === 1) { cheio[p - w] = 2; pilha[topo++] = p - w; }
+        if (y < h - 1 && cheio[p + w] === 1) { cheio[p + w] = 2; pilha[topo++] = p + w; }
+      }
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+      if (bw < minimo || bh < minimo || bw > maximo || bh > maximo) continue;
+      if (bw / bh < 0.75 || bw / bh > 1.33 || total < bw * bh * 0.6) continue;
+      blocos.push({x: x0 / escala, y: y0 / escala, w: bw / escala, h: bh / escala,
+        cx: (x0 + x1 + 1) / 2 / escala, cy: (y0 + y1 + 1) / 2 / escala, lado: (bw + bh) / 2 / escala});
+    }
+    const parecido = (a, b) => Math.abs(a.lado - b.lado) <= 0.2 * Math.max(a.lado, b.lado);
+    const achar = (base, x, y, tol) => blocos.find(item => parecido(item, base) &&
+      Math.abs(item.cx - x) <= tol && Math.abs(item.cy - y) <= tol);
+    let melhor = null;
+    for (const a of blocos) {
+      for (const b of blocos) {
+        const passo = b.cx - a.cx;
+        if (b === a || !parecido(a, b) || Math.abs(b.cy - a.cy) > a.lado * 0.15) continue;
+        if (passo < a.lado * 0.95 || passo > a.lado * 1.35) continue;
+        const tol = passo * 0.15;
+        const baixo = achar(a, a.cx, a.cy + passo, passo * 0.25);
+        if (!baixo) continue;
+        const passoY = baixo.cy - a.cy;
+        const cells = [];
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 3; c++) {
+            const item = achar(a, a.cx + c * passo, a.cy + r * passoY, tol);
+            if (item) cells.push({n: r * 3 + c + 1, linha: r + 1, coluna: c + 1,
+              x: item.x, y: item.y, w: item.w, h: item.h});
+          }
+        }
+        if (cells.length !== 9) continue;
+        let maior = false;
+        for (let k = 0; k < 3 && !maior; k++) {
+          maior = [[-1, k], [3, k], [k, -1], [k, 3]].some(([c, r]) =>
+            achar(a, a.cx + c * passo, a.cy + r * passoY, tol));
+        }
+        if (!maior && (!melhor || a.lado > melhor.lado)) melhor = {lado: a.lado, cells};
+      }
+    }
+    tentativas.push({blocos: blocos.length,
+      result: melhor && {rows: 3, cols: 3, cells: melhor.cells, lado: melhor.lado}});
+    }
+    return {
+      blocos: Math.max(...tentativas.map(item => item.blocos)),
+      result: tentativas.reduce((melhor, item) =>
+        item.result && (!melhor || item.result.lado > melhor.lado) ? item.result : melhor, null)
+    };
   }
-  function blockingNotice() {
-    // Examina somente avisos de erro; nunca copia o historico para os registros.
-    const notices = Array.from(document.querySelectorAll('[role="alert"], [data-testid="error-message"], [data-testid="conversation-turn-error"]'));
-    const hasError = notices.some(node => visible(node) && /limit|limite|too many|upload failed|falha|unable to upload|something went wrong|algo deu errado|try again|tente novamente|unsupported|não suportado|nao suportado/i.test(textOf(node)));
-    return hasError ? "O ChatGPT exibiu um aviso de limite ou falha. Confira a aba; nao houve reenvio automatico." : "";
-  }
-  function send(code, message, extra = {}) {
-    return chrome.runtime.sendMessage(reply(true, code, message, {id: current.id, provider: PROVIDER, ...extra}));
-  }
-  // Acorda a cada mudanca na pagina (sem esperar o relogio) ou, no maximo, a cada 400 ms.
-  function pageChange(ms) {
-    return new Promise(resolve => {
-      let observer = null, timer = null;
-      const finish = () => { if (timer !== null) clearTimeout(timer); observer?.disconnect(); resolve(); };
-      timer = setTimeout(finish, ms);
-      if (typeof MutationObserver === "function" && document.body) {
-        observer = new MutationObserver(finish);
-        observer.observe(document.body, {childList: true, subtree: true, characterData: true, attributes: true});
+
+  // Achou so uma fileira de 3 imagens? Reconstrói as outras duas pelas proporcoes
+  // fixas do desafio (mesma ideia de completarGrade, do GERAR_PDF_JS).
+  function completarFileiras(resultado, alturaTela) {
+    if (!resultado || resultado.error || resultado.cols !== 3 ||
+        resultado.rows < 1 || resultado.rows >= 3) return false;
+    const colunas = [1, 2, 3].map(coluna => resultado.cells.find(cell => cell.coluna === coluna));
+    if (colunas.some(item => !item)) return false;
+    const largura = Math.min(...colunas.map(cell => cell.w));
+    const altura = Math.min(...colunas.map(cell => cell.h));
+    if (!(largura > 20 && altura > 20)) return false;
+    const centrosX = colunas.map(cell => cell.x + cell.w / 2);
+    const centroY = colunas[0].y + colunas[0].h / 2;
+    const W = (centrosX[2] - centrosX[0]) / (0.824 - 0.176);
+    if (!(W > 100)) return false;
+    const alturas = [altura * 5, W * 1.5];
+    const razoes = [0.317, 0.533, 0.749];
+    let melhor = null;
+    for (const H of alturas) {
+      if (!(H > 100)) continue;
+      for (const razao of razoes) {
+        const top = centroY - razao * H;
+        if (top < 0 || top + H > alturaTela) continue;
+        if (!melhor || H > melhor.H) melhor = {H, top};
+      }
+    }
+    if (!melhor) return false;
+    const left = centrosX[0] - 0.176 * W;
+    let n = 0;
+    resultado.cells = [];
+    razoes.forEach((razao, linha) => {
+      for (let coluna = 0; coluna < 3; coluna++) {
+        resultado.cells.push({n: ++n, linha: linha + 1, coluna: coluna + 1,
+          x: Math.round(left + [0.176, 0.500, 0.824][coluna] * W - largura / 2),
+          y: Math.round(melhor.top + razao * melhor.H - altura / 2),
+          w: largura, h: altura});
       }
     });
+    resultado.rows = 3;
+    return true;
   }
-  async function until(check, timeout, failure) {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-      const notice = blockingNotice();
-      if (notice) throw Error(notice);
-      const value = check();
-      if (value) return value;
-      await pageChange(400);
-    }
-    throw Error(failure);
-  }
-  function clearOwnDraft(prompt) {
-    // O ChatGPT restaura o texto nao enviado de uma tarefa anterior; so apaga se for o nosso prompt.
-    const input = editor();
-    if (!input || !prompt || normalized(draftOf(input)) !== normalized(prompt)) return false;
-    input.focus();
-    if (input.tagName === "TEXTAREA") {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, "");
-    } else {
-      document.execCommand("selectAll", false);
-      if (!document.execCommand("delete", false)) input.replaceChildren();
-    }
-    input.dispatchEvent(new InputEvent("input", {bubbles: true, composed: true, inputType: "deleteContentBackward"}));
-    return !draftOf(input).trim();
-  }
-  function emptyConversation() {
-    const input = editor();
-    return !!input && !draftOf(input).trim() && !document.querySelector('[data-message-author-role="user"], [data-message-author-role="assistant"]') &&
-      !Array.from(document.querySelectorAll('input[type="file"]')).some(node => node.files?.length);
-  }
-  function writePrompt(prompt) {
-    const input = editor();
-    if (!input) throw Error("O campo de mensagem desapareceu.");
-    input.focus();
-    if (input.tagName === "TEXTAREA") {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, prompt);
-    } else if (input.isContentEditable) {
-      // A edicao nativa atualiza o editor da pagina, inclusive ProseMirror.
-      if (!document.execCommand("insertText", false, prompt)) input.replaceChildren(document.createTextNode(prompt));
-    } else {
-      throw Error("Campo de mensagem do ChatGPT nao reconhecido.");
-    }
-    input.dispatchEvent(new InputEvent("input", {bubbles: true, composed: true, inputType: "insertText", data: prompt}));
-    input.dispatchEvent(new Event("change", {bubbles: true}));
-  }
-  function attachmentPresent(name) {
-    const scope = composer();
-    if (!scope) return false;
-    // O nome pode aparecer abreviado; antes do prompt, qualquer indicacao de PDF basta.
-    const stem = name.replace(/\.pdf$/i, "").slice(0, 16);
-    const texts = [textOf(scope), ...Array.from(scope.querySelectorAll('[title], [aria-label], [data-testid*="attachment"], [data-testid*="file"]'))
-      .map(node => (node.getAttribute("title") || "") + " " + (node.getAttribute("aria-label") || "") + " " + textOf(node))];
-    return texts.some(text => text.includes(name) || text.includes(stem) || /\.pdf\b|\bPDF\b/i.test(text));
-  }
-  function uploadBusy() {
-    return !!composer()?.querySelector('[role="progressbar"], [aria-busy="true"], [data-state="uploading"], [data-testid="attachment-loading"]');
-  }
-  async function collectResponse() {
-    await send("PROGRESS", "ChatGPT recebeu a mensagem; aguardando resposta completa.");
-    let previous = "", stableSince = 0, lastProgress = 0;
-    const start = Date.now();
-    const text = await until(() => {
-      const answer = finalAnswer();
-      if (Date.now() - lastProgress >= 30000 || !lastProgress) {
-        lastProgress = Date.now();
-        // Diagnostico sem conteudo: somente sim/nao e contagens.
-        const sim = value => value ? "sim" : "nao";
-        send("PROGRESS", "Aguardando resposta do ChatGPT (" + Math.floor((Date.now() - start) / 1000) + "s) [texto " +
-          sim(answer?.text) + ", pronta " + sim(answer?.finished) + ", gerando " + sim(generating()) +
-          ", botoes " + actionButtons().length + ", blocos " + assistantMessages().length + "]").catch(() => {});
+
+  // fetch de data: URL decodifica o base64 de forma nativa (bem mais rapido em prints grandes).
+  const image = await createImageBitmap(await (await fetch("data:image/png;base64," + fonte)).blob());
+  try {
+    let result = analyze(image, OPCOES), origem = {x: 0, y: 0};
+    if (!e3x3(result)) {
+      const motivo = result.error || ("grade " + result.rows + "x" + result.cols +
+        " na tela de " + image.width + "x" + image.height + " px; esperado 3x3");
+      const parcial = result;
+      const porBlocos = gradePorBlocos(image);
+      result = porBlocos.result;
+      // Diagnostico so com medidas (tamanho da area e da grade), nunca com o conteudo.
+      const detalhes = [];
+      for (const regiao of result ? [] : regioesBrancas(image)) {
+        const parte = await createImageBitmap(image, regiao.x, regiao.y, regiao.w, regiao.h);
+        try {
+          const tentativa = analyze(parte, OPCOES);
+          if (e3x3(tentativa)) { result = tentativa; origem = regiao; break; }
+          // Em tela dupla, a fileira da tela toda pode nao caber; tente na regiao.
+          if (completarFileiras(tentativa, regiao.h)) { result = tentativa; origem = regiao; break; }
+          detalhes.push(regiao.w + "x" + regiao.h + ":" +
+            (tentativa.error ? "sem grade" : tentativa.rows + "x" + tentativa.cols));
+        } finally { parte.close(); }
       }
-      // Pausa na geracao nao e fim: exige controles finais, nada gerando e texto estavel.
-      // Sem barra reconhecida, so aceita resposta numerica (1 a 9) parada por 3 s.
-      const numerica = !!answer?.text && /^[1-9](?:\s*[,;]?\s*[1-9])*\.?$/.test(answer.text.trim()) && !generating();
-      if (!answer?.finished && !numerica) { previous = ""; stableSince = 0; return false; }
-      if (answer.text !== previous) { previous = answer.text; stableSince = Date.now(); return false; }
-      return Date.now() - stableSince >= (answer.finished ? 1500 : 3000) ? answer.text : false;
-    }, 10 * 60 * 1000, "O ChatGPT nao confirmou uma resposta completa em dez minutos. O PDF foi preservado.");
-    // O servidor torna a entrega idempotente; conserva o resultado ate salvar.
-    for (;;) {
-      try {
-        const response = await send("RESULT", "Resposta completa recebida do ChatGPT.", {text});
-        if (response?.ok) break;
-        if (response?.code === "NOT_ACTIVE" || response?.code === "WRONG_PROVIDER") throw Error("A tarefa mudou; resposta mantida nesta aba.");
-      } catch (error) {
-        if (/tarefa mudou/.test(error.message)) throw error;
-      }
-      await sleep(2000);
+      if (!result && completarFileiras(parcial, image.height)) result = parcial;
+      if (!result) return {ok: false, message: motivo + "; blocos quadrados " + porBlocos.blocos + "; areas brancas " +
+        (detalhes.length ? detalhes.join(", ") : "nenhuma")};
     }
-  }
-  async function resumeResponse() {
-    try { await collectResponse(); }
-    catch (error) { try { await send("ERROR", error.message || "Falha ao retomar a resposta."); } catch {} }
-    finally { running = false; }
-  }
-  async function process(job) {
-    let submitted = false;
-    try {
-      await until(composer, 45000, "Formulario do ChatGPT indisponivel. Confira o login na aba criada pela extensao.");
-      // Da tempo ao ChatGPT de restaurar um rascunho antes de conferir a conversa.
-      await sleep(600);
-      clearOwnDraft(job.prompt);
-      if (!emptyConversation()) throw Error("A conversa possui mensagens ou um rascunho. Nada foi substituido.");
-      await until(fileInput, 15000, "Campo de anexo de PDF nao encontrado no ChatGPT. A interface pode ter mudado.");
-      await send("PROGRESS", "Anexando PDF ao ChatGPT.");
-      const file = new File([Uint8Array.from(atob(job.data), character => character.charCodeAt(0))], job.name, {type: "application/pdf"});
-      job.data = "";
-      let attempts = 0, lastAttempt = 0;
-      const attach = () => {
-        // Se o anexo nao aparecer, tenta de novo (ate 3 vezes), passando pelos campos disponiveis.
-        const inputs = fileInputs();
-        const input = inputs[attempts % Math.max(1, inputs.length)];
-        attempts++;
-        lastAttempt = Date.now();
-        if (!input) return;
-        const transfer = new DataTransfer();
-        transfer.items.add(file);
-        input.files = transfer.files;
-        input.dispatchEvent(new Event("input", {bubbles: true}));
-        input.dispatchEvent(new Event("change", {bubbles: true}));
-      };
-      attach();
-      await until(() => {
-        if (attachmentPresent(job.name)) return true;
-        if (attempts < 3 && Date.now() - lastAttempt >= 8000) {
-          send("PROGRESS", "Anexo nao confirmado; tentando de novo (" + (attempts + 1) + "/3).").catch(() => {});
-          attach();
-        }
-        return false;
-      }, 60000, "O ChatGPT nao confirmou o PDF anexado.");
-      writePrompt(job.prompt);
-      let readySince = 0;
-      await until(() => {
-        if (draftOf(editor()) === job.prompt && !uploadBusy() && !generating() && !disabled(sendButton())) {
-          if (!readySince) readySince = Date.now();
-          return Date.now() - readySince >= 600;
-        }
-        readySince = 0;
-        return false;
-      }, 120000, "O PDF ou o campo de mensagem nao terminou de carregar. Nada foi enviado novamente.");
-      const button = sendButton();
-      if (disabled(button) || !button.isConnected || generating()) throw Error("O botao Enviar mudou; envio interrompido.");
-      await send("PROGRESS", "PDF anexado; mensagem enviada ao ChatGPT.");
-      button.click();
-      submitted = true;
-      await until(() => messageSent(job.prompt, job.name), 60000,
-        "O ChatGPT nao confirmou a mensagem. Confira a aba antes de repetir.");
-      await collectResponse();
-    } catch (error) {
-      try { await send("ERROR", (error.message || "Falha no ChatGPT.") + (submitted ? " A mensagem pode ja ter sido enviada." : "")); } catch {}
-    } finally { running = false; }
-  }
-  chrome.runtime.onMessage.addListener((message, sender, respond) => {
-    // O ID autentica a propria extensao; o Chrome pode omitir ou variar a URL do worker.
-    if (sender.id !== chrome.runtime.id || sender.tab || message?.servidor !== APP) return;
-    if (message.code === "PING") {
-      const ready = !!composer();
-      respond(reply(ready, ready ? "READY" : "WAIT_EDITOR", ready ? "Campo de mensagem pronto." :
-        "A pagina abriu, mas o campo de mensagem nao esta disponivel. Confira o login na aba do ChatGPT.", {provider: PROVIDER}));
-      return;
+    // As celulas 1, 3, 4 e 7 devolvem a geometria do desafio (em coordenadas da tela).
+    const cell = n => {
+      const item = result.cells.find(item => item.n === n ||
+        (item.linha === Math.ceil(n / 3) && item.coluna === ((n - 1) % 3) + 1));
+      return item && {...item, x: item.x + origem.x, y: item.y + origem.y};
+    };
+    const pontos = [1, 3, 4, 7].map(cell);
+    if (pontos.some(item => !item)) return {ok: false, message: "celulas da grade incompletas"};
+    const [c1, c3, c4, c7] = pontos.map(item => [item.x + item.w / 2, item.y + item.h / 2]);
+    const W = (c3[0] - c1[0]) / (0.824 - 0.176);
+    const H = ((c4[1] - c1[1]) + (c7[1] - c4[1])) / (2 * (0.533 - 0.317));
+    if (!(W > 100 && H > 100)) return {ok: false, message: "tamanho do desafio invalido na tela"};
+    const left = c1[0] - 0.176 * W, top = c1[1] - 0.317 * H;
+    const x0 = clamp(Math.floor(left), 0, image.width - 1);
+    const y0 = clamp(Math.floor(top), 0, image.height - 1);
+    const x1 = clamp(Math.ceil(left + W), x0 + 1, image.width);
+    const y1 = clamp(Math.ceil(top + H), y0 + 1, image.height);
+    if (x1 - x0 < 100 || y1 - y0 < 100) return {ok: false, message: "recorte do desafio muito pequeno"};
+    const canvas = document.createElement("canvas");
+    canvas.width = x1 - x0;
+    canvas.height = y1 - y0;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(image, x0, y0, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+    const recorte = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!recorte) return {ok: false, message: "Nao consegui recortar o desafio da tela."};
+    const dados = new Uint8Array(await recorte.arrayBuffer());
+    let binario = "";
+    for (let i = 0; i < dados.length; i += 32768) binario += String.fromCharCode.apply(null, dados.subarray(i, i + 32768));
+    const cells = {};
+    for (let n = 1; n <= 9; n++) {
+      const alvo = cell(n);
+      if (alvo) cells[n] = [Math.round(alvo.x + alvo.w / 2), Math.round(alvo.y + alvo.h / 2)];
     }
-    if (message.code === "RESUME") {
-      if (location.origin !== "https://chatgpt.com" || message.provider !== PROVIDER ||
-          typeof message.id !== "string" || typeof message.prompt !== "string" || !message.prompt.trim()) {
-        respond(reply(false, "INVALID_JOB", "Retomada invalida.")); return;
-      }
-      if (running) { respond(reply(current?.id === message.id, "BUSY", "A coleta da resposta ja esta ativa.")); return; }
-      if (!sentPrompt(message.prompt) && !/^\/c\//.test(location.pathname || "")) {
-        respond(reply(false, "WAIT_MESSAGE", "Aguardando confirmacao da mensagem enviada; PDF nao reenviado.")); return;
-      }
-      current = message;
-      running = true;
-      respond(reply(true, "RESUMED", "Coleta retomada na aba da tarefa, sem reenviar PDF."));
-      void resumeResponse();
-      return;
-    }
-    if (message.code !== "PROCESS") return;
-    if (running) { respond(reply(false, "BUSY", "Esta aba ja esta processando um PDF.")); return; }
-    if (location.origin !== "https://chatgpt.com" || message.provider !== PROVIDER || typeof message.id !== "string" ||
-        typeof message.data !== "string" || !message.data || message.data.length > 29 * 1024 * 1024 ||
-        typeof message.name !== "string" || !/\.pdf$/i.test(message.name) || typeof message.prompt !== "string" || !message.prompt.trim()) {
-      respond(reply(false, "INVALID_JOB", "Tarefa invalida."));
-      return;
-    }
-    clearOwnDraft(message.prompt);
-    if (!emptyConversation()) { respond(reply(false, "NOT_EMPTY", "Use somente a conversa nova criada para esta tarefa.")); return; }
-    running = true;
-    current = message;
-    respond(reply(true, "ACCEPTED", "PDF recebido pela extensao."));
-    void process(message);
-  });
-})();
+    // Botao (Pular/Verificar/Proximo) achado na print; sem achar, proporcao fixa do desafio.
+    // `grade` volta para o Python procurar o botao de novo depois de marcar as imagens.
+    const passo = (c3[0] - c1[0]) / 2;
+    const todas = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(cell).filter(Boolean);
+    const grade = [Math.min(...todas.map(c => c.x)), Math.max(...todas.map(c => c.x + c.w)),
+      Math.max(c7[1] + passo * 0.5, ...todas.map(c => c.y + c.h)), passo];
+    const achado = acharBotao(image, grade[0], grade[1], grade[2], grade[3]);
+    const button = achado || [Math.round(left + 0.872 * W), Math.round(top + 0.953 * H)];
+    return {ok: true, png: btoa(binario), cells, button, botaoAchado: Boolean(achado), grade};
+  } finally { image.close(); }
+})().then(concluir, error => concluir({ok: false, message: String((error && error.message) || error)}));
 '''
 
-EXT_MANIFEST = r'''{
-  "manifest_version": 3,
-  "name": "PDF → ChatGPT Web",
-  "version": "5.0.6",
-  "minimum_chrome_version": "120",
-  "description": "Anexa o PDF ao ChatGPT Web, envia e salva a resposta no programa local. Sem API.",
-  "permissions": [
-    "storage",
-    "alarms",
-    "scripting"
-  ],
-  "host_permissions": [
-    "https://chatgpt.com/*",
-    "http://127.0.0.1/*"
-  ],
-  "background": {
-    "service_worker": "background.js"
-  },
-  "action": {
-    "default_title": "PDF → ChatGPT Web"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://chatgpt.com/*"
-      ],
-      "js": [
-        "chatgpt.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ]
-}
+# Procura so o botao numa print nova (depois de marcar as imagens, o texto e a largura mudam).
+BOTAO_JS = r'''
+const fonte = arguments[0], grade = arguments[1], concluir = arguments[arguments.length - 1];
+(async () => {
+  "use strict";
+''' + ACHAR_BOTAO_JS + r'''
+  const image = await createImageBitmap(await (await fetch("data:image/png;base64," + fonte)).blob());
+  try {
+    const button = acharBotao(image, grade[0], grade[1], grade[2], grade[3]);
+    return button ? {ok: true, button} : {ok: false, message: "botao nao encontrado"};
+  } finally { image.close(); }
+})().then(concluir, error => concluir({ok: false, message: String((error && error.message) || error)}));
 '''
-
-EXTENSION_FILES = {"background.js": EXT_BACKGROUND, "chatgpt.js": EXT_CHATGPT, "manifest.json": EXT_MANIFEST}
-EXT_VERSION = json.loads(EXT_MANIFEST)["version"]
-
-
-def envelope(ok, code, message, **extra):
-    return dict(servidor="separador", ok=ok, code=code, message=message, provedor=PROVIDER, **extra)
-
 
 def safe_directory(path):
     path = Path(path)
@@ -1116,43 +998,6 @@ def write_json(path, value):
     atomic_bytes(path, json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
 
 
-def token():
-    safe_directory(CONFIG_PATH.parent)
-    if CONFIG_PATH.is_symlink():
-        raise ValueError("Configuracao local nao pode ser um link.")
-    if CONFIG_PATH.exists():
-        match = re.fullmatch(r'globalThis\.VIGIA_TOKEN="([a-f0-9]{64})";\s*',
-                             CONFIG_PATH.read_text(encoding="utf-8"))
-        if not match:
-            raise ValueError("Configuracao local invalida; chave preservada.")
-        return match.group(1)
-    value = secrets.token_hex(32)
-    with CONFIG_PATH.open("x", encoding="utf-8", newline="\n") as stream:
-        stream.write('globalThis.VIGIA_TOKEN="' + value + '";\n')
-    return value
-
-
-def materializar(base):
-    destination = Path(base) / "pdf" / "extensao_deepseek"
-    safe_directory(destination)
-    for name, source in EXTENSION_FILES.items():
-        target = destination / name
-        if target.is_symlink():
-            raise ValueError("Arquivo da extensao nao pode ser um link.")
-        content = source.encode("utf-8")
-        if not target.exists() or target.read_bytes() != content:
-            atomic_bytes(target, content)
-    # Restos de versoes antigas da extensao.
-    for name in ("deepseek.js",):
-        (destination / name).unlink(missing_ok=True)
-
-
-def pdf_key(path):
-    info = path.stat()
-    return json.dumps([path.name, info.st_size, info.st_mtime_ns // 1000000],
-                      ensure_ascii=False, separators=(",", ":"))
-
-
 def safe_pdf(name):
     if (not isinstance(name, str) or Path(name).name != name or
             "/" in name or "\\" in name or not name.lower().endswith(".pdf")):
@@ -1179,16 +1024,11 @@ class Engine:
     def __init__(self):
         safe_directory(PDF_DIR)
         safe_directory(RESP_DIR)
-        self.last_contact = 0
-        self.extension_version = ""
         self.state = self._load()
         self.persisted = copy.deepcopy(self.state)
         self.save()
 
     def _load(self):
-        if not STATE_PATH.exists() and LEGACY_STATE_PATH.exists():
-            with STATE_PATH.open("xb") as target:
-                target.write(LEGACY_STATE_PATH.read_bytes())
         state = {"jobs": []}
         if STATE_PATH.exists():
             try:
@@ -1209,20 +1049,12 @@ class Engine:
             if not isinstance(job.get("id"), str) or job["id"] in identifiers:
                 raise ValueError("Tarefa existente invalida; dados preservados.")
             identifiers.add(job["id"])
-            if job.get("status") == "aguardando" and job.get("provider", "deepseek") != PROVIDER:
-                job.update(status="erro", error="Envio anterior ao DeepSeek; preservado sem reenviar.", finished=time.time())
-            if job.get("status") == "enviando":
-                job.update(status="erro", error="Envio anterior incerto; nao reenviado.")
-            # Captura de uma execucao anterior: o robo ja nao espera por ela.
-            if job.get("status") in ("fila", "preparando") and job.get("captura"):
-                job.update(status="erro", error="Programa reiniciado antes do envio.", finished=time.time())
-            # Enviada antes de reiniciar: nao bloqueia a fila; uma resposta tardia ainda vira TXT.
-            if job.get("status") == "aguardando" and job.get("captura"):
+            # Tarefa de uma execucao anterior (inclusive da antiga extensao): o robo ja nao
+            # espera por ela. Fica no historico, sem reenviar.
+            if job.get("status") in ("fila", "preparando", "aguardando", "enviando"):
                 job.update(status="erro", error="Programa reiniciado antes da resposta.", finished=time.time())
-            if job.get("status") in ("fila", "preparando"):
-                job.update(status="fila", provider=PROVIDER)
                 job.pop("tabId", None)
-        state.update(envelope(True, "STATE", "Registro local do fluxo."), version=5)
+        state.update(servidor="separador", ok=True, code="STATE", message="Registro local do fluxo.", version=6)
         return state
 
     def save(self):
@@ -1233,18 +1065,6 @@ class Engine:
                 self.state = copy.deepcopy(self.persisted)
                 raise
             self.persisted = copy.deepcopy(self.state)
-
-    def active(self):
-        return next((job for job in self.state["jobs"] if job.get("status") in
-                     ("fila", "preparando", "aguardando")), None)
-
-    def job(self, identifier):
-        if not isinstance(identifier, str):
-            raise ValueError("Identificador de tarefa invalido.")
-        for job in self.state["jobs"]:
-            if job.get("id") == identifier:
-                return job
-        raise ValueError("Tarefa nao encontrada.")
 
     def capture_job(self, version):
         return next((job for job in reversed(self.state["jobs"])
@@ -1273,48 +1093,33 @@ class Engine:
     def create(self, name, capture=""):
         with LOCK:
             path = safe_pdf(name)
-            job = dict(id=secrets.token_hex(16), key=pdf_key(path), name=path.name,
-                       status="fila", created=time.time(), batch=secrets.token_hex(8),
+            job = dict(id=secrets.token_hex(16), name=path.name, status="fila", created=time.time(),
                        captura=capture, progress="", error="", provider=PROVIDER)
             self.state["jobs"].append(job)
             self.save()
-            NOVA_TAREFA.notify_all()
             return job
 
-    def proximo(self, espera=0.0):
-        """Devolve a tarefa ativa; sem tarefa, espera ate `espera` segundos (long-poll)."""
+    def processar_api(self, job, jpeg):
+        """Envia a pagina numerada a API da OpenAI e grava a resposta em TXT."""
         with LOCK:
-            deadline = time.monotonic() + max(0.0, min(float(espera), MAX_ESPERA))
-            job = self.active()
-            while job is None and time.monotonic() < deadline:
-                NOVA_TAREFA.wait(deadline - time.monotonic())
-                job = self.active()
-            return envelope(True, "OK", "Proxima tarefa.", job=dict(job) if job else None,
-                            extensao_versao=EXT_VERSION)
-
-    def payload(self, job):
-        with LOCK:
-            path = safe_pdf(job["name"])
-            info = path.stat()
-            old_key = "%s:%s:%s" % (path.name, info.st_size, info.st_mtime_ns // 1000000)
-            if job.get("key") not in (pdf_key(path), old_key):
-                raise ValueError("O PDF mudou depois de entrar na fila.")
-            if info.st_size > MAX_PAYLOAD:
-                raise ValueError("PDF acima de 20 MB.")
-            with path.open("rb") as stream:
-                data = stream.read(MAX_PAYLOAD + 1)
-            if len(data) > MAX_PAYLOAD or not data.startswith(b"%PDF-"):
-                raise ValueError("PDF invalido ou acima de 20 MB.")
-            job["sha256"] = hashlib.sha256(data).hexdigest()
+            job.update(status="aguardando", sentAt=time.time(), progress="Enviado a API da OpenAI.")
             self.save()
-            return dict(name=path.name, data=base64.b64encode(data).decode("ascii"))
+        log("OpenAI: enviando a imagem numerada (modelo %s)." % API.modelo)
+        try:
+            text = API.responder(jpeg)
+        except Exception as error:
+            self.falha(job, str(error))
+            return
+        try:
+            self.result(job, text)
+        except ValueError as error:
+            self.falha(job, str(error))
 
     def result(self, job, text):
         with LOCK:
             if job.get("status") == "concluido":
                 return job["output"]
-            late = job.get("status") == "erro" and job.get("sentAt")
-            if job.get("status") != "aguardando" and not late:
+            if job.get("status") != "aguardando":
                 raise ValueError("A tarefa nao esta aguardando resposta.")
             if (not isinstance(text, str) or not text.strip() or
                     len(text.encode("utf-8")) > MAX_RESULT):
@@ -1323,7 +1128,7 @@ class Engine:
             content = text.strip() + "\n"
             stem = Path(job["name"]).stem[:160]
             for number in range(10000):
-                name = stem + ("" if number == 0 else "_chatgpt_" + str(number)) + ".txt"
+                name = stem + ("" if number == 0 else "_" + str(number)) + ".txt"
                 target = RESP_DIR / name
                 try:
                     with target.open("x", encoding="utf-8", newline="\n") as stream:
@@ -1338,17 +1143,20 @@ class Engine:
             job.update(status="concluido", output="respostas/" + name,
                        finished=time.time(), progress="Resposta salva.", error="")
             self.save()
-            log("Resposta do ChatGPT em %.1fs, salva em pdf/respostas/%s"
+            log("Resposta da OpenAI em %.1fs, salva em pdf/respostas/%s"
                 % (job["finished"] - float(job.get("created") or job["finished"]), name))
             # Uma falha na limpeza nunca impede uma resposta ja persistida.
             try:
                 self.cleanup(safe_pdf(job["name"]), target)
             except OSError:
                 logger.exception("Resposta salva; limpeza adiada.")
-            if not late and ROBOT is not None and job.get("captura"):
+            if ROBOT is not None and job.get("captura"):
                 job["entrega"] = ROBOT.deliver(content, job["captura"])
                 if job["entrega"] != "enviado":
-                    log("Resposta nao executada (%s). Digite os numeros ou p." % job["entrega"])
+                    log("Resposta nao executada (%s)." % job["entrega"])
+                if job["entrega"] == "formato_invalido":
+                    # A API respondeu sem numeros: conta como falha e tira outra captura sozinho.
+                    ROBOT.falhou(job["captura"])
             return job["output"]
 
     def falha(self, job, message):
@@ -1357,7 +1165,7 @@ class Engine:
                 return
             job.update(status="erro", error=str(message)[:500], finished=time.time())
             self.save()
-        log("Falha no ChatGPT: " + job["error"])
+        log("Falha na API da OpenAI: " + job["error"])
         if ROBOT is not None and job.get("captura"):
             ROBOT.falhou(job["captura"])
 
@@ -1366,7 +1174,7 @@ class Engine:
         safe_directory(RESP_DIR)
         protected = {keep_pdf.resolve(), keep_txt.resolve()}
         protected.update(safe_pdf(job["name"]).resolve() for job in self.state["jobs"]
-                         if job.get("status") in ("fila", "preparando", "aguardando"))
+                         if job.get("status") in ("fila", "aguardando"))
         for directory, pattern in ((PDF_DIR, "*.pdf"), (RESP_DIR, "*.txt")):
             for path in directory.glob(pattern):
                 if (path.is_symlink() or not path.is_file() or
@@ -1377,190 +1185,17 @@ class Engine:
                 except OSError:
                     logger.warning("Arquivo antigo ocupado; limpeza adiada.")
 
-    def reap(self):
-        expired = []
-        with LOCK:
-            for job in self.state["jobs"]:
-                if job.get("status") == "aguardando" and time.time() - float(job.get("sentAt") or 0) > 900:
-                    expired.append(job)
-        for job in expired:
-            self.falha(job, "Resposta nao confirmada em 15 minutos; nao reenviado automaticamente.")
-
-
-ROTAS_EXTENSAO = ("/api/vigia/opened", "/api/vigia/payload", "/api/vigia/dispatch",
-                  "/api/vigia/result", "/api/vigia/progress", "/api/vigia/error")
-
-
-def executar(engine, route, data):
-    """Rotas usadas pela extensao, sempre conferindo tarefa, estado e aba."""
-    with LOCK:
-        if route not in ROTAS_EXTENSAO:
-            raise ValueError("Rota da extensao invalida.")
-        job = engine.job(data.get("id"))
-        if job.get("provider") != PROVIDER:
-            raise ValueError("Tarefa de outro provedor; registro preservado.")
-        if route == "/api/vigia/opened":
-            if job["status"] not in ("fila", "preparando") or type(data.get("tabId")) is not int:
-                raise ValueError("Abertura de tarefa invalida.")
-            job.update(status="preparando", tabId=data["tabId"])
-            engine.save()
-            log("ChatGPT aberto no Chrome.")
-            return envelope(True, "OK", "Aba registrada.")
-        if route == "/api/vigia/payload":
-            if job["status"] != "preparando":
-                raise ValueError("A tarefa nao esta em preparacao.")
-            return envelope(True, "OK", "PDF preparado.", **engine.payload(job))
-        if route == "/api/vigia/dispatch":
-            if job["status"] != "preparando":
-                raise ValueError("A tarefa nao esta em preparacao.")
-            job.update(status="aguardando", sentAt=time.time(), progress="Preparando envio ao ChatGPT.")
-            engine.save()
-            return envelope(True, "OK", "Envio registrado.")
-        if route == "/api/vigia/result":
-            if type(data.get("tabId")) is not int or data["tabId"] != job.get("tabId"):
-                raise ValueError("A resposta pertence a outra aba.")
-            if job["status"] != "concluido":
-                engine.result(job, data.get("text", ""))
-            return envelope(True, "SAVED", "Resposta salva.", output="respostas/" + Path(job["output"]).name)
-        if route == "/api/vigia/progress":
-            if job["status"] not in ("preparando", "aguardando"):
-                raise ValueError("A tarefa nao esta em preparacao ou aguardando resposta.")
-            message = str(data.get("message", ""))[:300]
-            if message and message != job.get("progress"):
-                log("ChatGPT: " + message)
-            job["progress"] = message
-            engine.save()
-            return envelope(True, "OK", "Andamento registrado.")
-    # /api/vigia/error: fora do LOCK para o robo poder reagir.
-    engine.falha(job, data.get("message", data.get("error", "")))
-    return envelope(True, "OK", "Erro registrado.")
-
-
-class Handler(BaseHTTPRequestHandler):
-    """Somente /api/status e as rotas da extensao. Nao serve arquivos."""
-
-    def setup(self):
-        super().setup()
-        self.connection.settimeout(MAX_ESPERA + 15)
-
-    def log_message(self, format, *args):
-        logger.debug("HTTP %s", self.command)
-
-    def respond(self, status, value):
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
-
-    def status(self, status, code, message, **extra):
-        self.respond(status, envelope(status == 200, code, message, **extra))
-
-    def send_error(self, code, message=None, explain=None):
-        self.status(code, "HTTP_ERROR", message or "Requisicao nao permitida.")
-
-    def local_host(self):
-        return self.headers.get("Host", "") == "127.0.0.1:%s" % self.server.server_port
-
-    def authorized_extension(self):
-        if self.headers.get("X-Vigia-Provider") != PROVIDER:
-            return False
-        origin = self.headers.get("Origin", "")
-        if not self.local_host() or (origin and not re.fullmatch(r"chrome-extension://[a-p]{32}", origin)):
-            return False
-        try:
-            return bool(SECRET) and hmac.compare_digest(self.headers.get("X-Vigia-Token", ""), SECRET)
-        except TypeError:
-            return False
-
-    def extension_contact(self):
-        version = self.headers.get("X-Vigia-Version", "")
-        with LOCK:
-            first = ENGINE.last_contact == 0
-            ENGINE.last_contact = time.time()
-            if re.fullmatch(r"[0-9.]{1,40}", version):
-                ENGINE.extension_version = version
-        if first:
-            log("Extensao do Chrome conectada (versao %s)." % (version or "?"))
-
-    def read_json(self, limit):
-        if self.headers.get("Transfer-Encoding"):
-            raise ValueError("Envie o tamanho do corpo da requisicao.")
-        length = int(self.headers.get("Content-Length", "0"))
-        if not 0 < length <= limit:
-            raise ValueError("Tamanho da requisicao invalido.")
-        content = self.rfile.read(length)
-        if len(content) != length:
-            raise ValueError("Requisicao incompleta.")
-        value = json.loads(content.decode("utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("O corpo JSON deve ser um objeto.")
-        return value
-
-    def do_HEAD(self):
-        self.do_GET()
-
-    def do_GET(self):
-        url = urllib.parse.urlsplit(self.path)
-        try:
-            if not self.local_host():
-                self.status(403, "FAILED", "Endereco local invalido.")
-            elif url.path == "/api/status":
-                self.status(200, "pronto", "Programa pronto.", versao=VERSAO)
-            elif url.path == "/api/vigia/next":
-                if not self.authorized_extension():
-                    self.status(403, "FAILED", "Acesso da extensao nao autorizado.")
-                    return
-                self.extension_contact()
-                espera = urllib.parse.parse_qs(url.query).get("espera", ["0"])[0]
-                self.respond(200, ENGINE.proximo(float(espera) if re.fullmatch(r"\d{1,2}", espera) else 0))
-            else:
-                self.status(404, "NOT_FOUND", "Rota desconhecida.")
-        except (ValueError, OSError) as error:
-            self.status(400, "FAILED", str(error))
-        except Exception:
-            logger.exception("Falha na requisicao GET.")
-            self.status(500, "FAILED", "Nao foi possivel atender a requisicao.")
-
-    def do_POST(self):
-        path = urllib.parse.urlsplit(self.path).path
-        try:
-            if not path.startswith("/api/vigia/"):
-                self.status(404, "NOT_FOUND", "Rota desconhecida.")
-            elif not self.authorized_extension():
-                self.status(403, "FAILED", "Acesso nao autorizado.")
-            else:
-                self.extension_contact()
-                self.respond(200, executar(ENGINE, path, self.read_json(30 * 1024 * 1024)))
-        except (ValueError, OSError, KeyError, TypeError) as error:
-            self.status(400, "FAILED", str(error))
-        except Exception:
-            logger.exception("Falha na requisicao POST.")
-            self.status(500, "FAILED", "Falha no programa; dados anteriores preservados.")
-
-
-class LocalServer(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def service_actions(self):
-        now = time.monotonic()
-        if now >= getattr(self, "next_maintenance", 0):
-            self.next_maintenance = now + 20
-            try:
-                ENGINE.reap()
-            except Exception:
-                logger.exception("Falha na verificacao da fila; dados preservados.")
-
 
 class Robo:
     """Captura, gera o PDF e executa a resposta, tudo no mesmo processo."""
 
     MAX_TENTATIVAS = 3
     MAX_REPETICOES = 2
+    # Producao sem ninguem no terminal: aviso sem resposta volta a vigiar sozinho.
+    RETOMAR_SOZINHO = 30.0
+    # Erro inesperado no robo: espera um pouco, reabre o Chrome invisivel e recomeca.
+    ESPERA_RECOMECAR = 10.0
+    aviso_desde = None
 
     def __init__(self):
         self.inbox = queue.Queue()
@@ -1622,12 +1257,12 @@ class Robo:
             self.sequence += 1
             self.version = "%s-%s" % (self.session, self.sequence)
             self.waiting = True
-            self.message = "Captura pronta; aguardando ChatGPT."
+            self.message = "Captura pronta; aguardando a OpenAI."
             return self.version
 
     def atual(self, version):
         with LOCK:
-            return bool(self.waiting and version and version == self.version)
+            return bool(not self.stop_event.is_set() and self.waiting and version and version == self.version)
 
     def deliver(self, text, version):
         values = parse_numbers(text)
@@ -1645,12 +1280,14 @@ class Robo:
         return "enviado"
 
     def falhou(self, version):
-        """Falha no ChatGPT: tira outra captura sozinho, no maximo duas vezes seguidas."""
+        """Falha na API: tira outra captura sozinho, no maximo duas vezes seguidas."""
         with LOCK:
             if not self.atual(version):
                 return
             if self.repeticoes >= self.MAX_REPETICOES:
-                log("Falhou de novo. Digite p para nova captura ou os numeros (ex.: 1,5,9).")
+                self.aviso_desde = time.monotonic()
+                log("Falhou de novo. Digite p ou os numeros (ex.: 1,5,9); sem resposta em %ds, "
+                    "volto a vigiar sozinho." % self.RETOMAR_SOZINHO)
                 return
             self.repeticoes += 1
             self.waiting = False
@@ -1663,7 +1300,7 @@ class Robo:
         for tentativa in range(1, self.MAX_TENTATIVAS + 1):
             inicio = time.monotonic()
             png = browser.capture(anterior, espera)
-            if png is None:
+            if png is None or self.stop_event.is_set():
                 return
             version = self.publish(png)
             try:
@@ -1675,228 +1312,405 @@ class Robo:
                 log("Grade nao reconhecida (%s). Capturando de novo." % error)
                 anterior, espera = None, 2.0
                 continue
-            ENGINE.receber_pdf(pdf, version)
-            log("Captura + PDF em %.1fs; enviando ao ChatGPT." % (time.monotonic() - inicio))
+            if self.stop_event.is_set():
+                return
+            job = ENGINE.receber_pdf(pdf, version)
+            threading.Thread(target=ENGINE.processar_api, args=(job, getattr(browser, "jpeg", "")),
+                             name="openai", daemon=True).start()
+            log("Captura + PDF em %.1fs; enviando a OpenAI." % (time.monotonic() - inicio))
             return
 
     def aviso(self, message):
         with LOCK:
             self.waiting = True
             self.message = message
-        log(message)
+            self.aviso_desde = time.monotonic()
+        log(message + " (sem resposta em %ds, volto a vigiar sozinho)" % self.RETOMAR_SOZINHO)
 
-    def run(self):
-        browser = None
+    def retomar(self):
+        """Ninguem respondeu ao aviso no terminal: em producao, volta a vigiar a tela sozinho."""
+        with LOCK:
+            if not (self.waiting and self.aviso_desde is not None and
+                    time.monotonic() - self.aviso_desde >= self.RETOMAR_SOZINHO):
+                return False
+            self.waiting, self.aviso_desde = False, None
+        log("Ninguem respondeu no terminal em %ds; voltando a vigiar a tela." % self.RETOMAR_SOZINHO)
+        return True
+
+    def ciclo(self, browser):
         try:
-            browser = BrowserRobo(self.stop_event)
-            browser.open()
+            self.capturar(browser, None)
+        except ValueError as error:
+            self.aviso(str(error))
+        while not self.stop_event.is_set():
             try:
-                self.capturar(browser, None)
+                version, answer = self.inbox.get(timeout=0.5)
+            except queue.Empty:
+                if not self.retomar():
+                    continue
+                version, answer = self.version, "p"
+            if answer == "s":
+                break
+            with LOCK:
+                if version != self.version:
+                    continue
+                self.aviso_desde = None
+            try:
+                anterior = None
+                if answer != "p":
+                    anterior = browser.answer(answer)
+                self.capturar(browser, anterior)
             except ValueError as error:
                 self.aviso(str(error))
-            while not self.stop_event.is_set():
-                try:
-                    version, answer = self.inbox.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if answer == "s":
-                    break
+
+    def run(self):
+        """Fica de pe enquanto o programa estiver aberto: um erro inesperado (Chrome, mouse...)
+        e avisado, o Chrome invisivel e reaberto e a vigilancia recomeca."""
+        primeira = True
+        while not self.stop_event.is_set():
+            browser = None
+            try:
+                browser = TelaRobo(self.stop_event)
+                primeira = False
+                browser.open()
+                self.ciclo(browser)
+            except Exception as error:
                 with LOCK:
-                    if version != self.version:
-                        continue
-                try:
-                    anterior = None
-                    if answer != "p":
-                        anterior = browser.answer(answer)
-                    self.capturar(browser, anterior)
-                except ValueError as error:
-                    self.aviso(str(error))
-        except Exception as error:
-            with LOCK:
-                self.message = "Robo interrompido: " + str(error).splitlines()[0]
-            log(self.message)
-            logger.debug("Falha no robo.", exc_info=True)
-        finally:
-            with LOCK:
-                self.waiting = False
-            if browser is not None:
-                browser.close_driver()
+                    self.message = "Robo interrompido: " + (str(error).strip().splitlines() or ["erro"])[0]
+                logger.debug("Falha no robo.", exc_info=True)
+                if primeira:
+                    # Nem abriu (Selenium ausente, fora do Windows...): insistir nao resolve.
+                    log(self.message)
+                    break
+                log(self.message[:300] + " Recomecando em %ds." % self.ESPERA_RECOMECAR)
+            finally:
+                with LOCK:
+                    self.waiting = False
+                if browser is not None:
+                    browser.close_driver()
+            if self.stop_event.wait(self.ESPERA_RECOMECAR):
+                break
 
 
-class BrowserRobo:
-    POSITIONS = {1: (0.176, 0.317), 2: (0.500, 0.317), 3: (0.824, 0.317),
-                 4: (0.176, 0.533), 5: (0.500, 0.533), 6: (0.824, 0.533),
-                 7: (0.176, 0.749), 8: (0.500, 0.749), 9: (0.824, 0.749)}
-    BUTTON = (0.872, 0.953)
+class TelaRobo:
+    """Print da tela a cada 5s; localiza a grade e responde com cliques humanos."""
+
+    centros = {}
+    botao = None
+    grade = None
+    last = None
+    # Depois de responder, da tempo ao desafio de trocar antes da primeira print.
+    ESPERA_APOS_RESPOSTA = 2.0
+    # So entrega um recorte repetido em duas prints seguidas: as imagens surgem aos poucos
+    # e, logo apos a resposta, o desafio antigo ainda pode estar na tela.
+    CONFIRMAR_TELA = 1.0
+    # Chrome invisivel que parou de responder (processo fechado, falta de memoria...):
+    # 2 falhas seguidas reabrem o Chrome; desiste apos 3 reaberturas sem voltar a funcionar.
+    FALHAS_PARA_REABRIR = 2
+    MAX_REINICIOS = 3
+    # Programa aberto por muito tempo: renova o Chrome invisivel a cada 2h, so sem desafio na
+    # tela, antes que ele acumule memoria e caia.
+    RENOVAR_CHROME = 2 * 3600.0
+    aberto_em = None
+    # Mesmo desafio parado depois da resposta (clique nao pegou, erro do site): responde de novo.
+    REPETIR_MESMO = 15.0
+    # Grade nas mesmas posicoes, mas com algum detalhe mudando a cada print (aviso, animacao).
+    MAX_MUDANCAS = 3
 
     def __init__(self, stop_event):
-        # Selenium ja era utilizado pelo robo; o servidor continua stdlib.
+        if os.name != "nt":
+            raise RuntimeError("O programa so funciona no Windows (print da tela e mouse).")
+        self.driver = self._abrir_chrome()
+        self.aberto_em = time.monotonic()
+        self.stop_event = stop_event
+        self.centros = {}
+        self.botao = None
+
+    @staticmethod
+    def _abrir_chrome():
+        """Chrome invisivel so para processar imagens (Selenium; o resto e biblioteca padrao)."""
         try:
             from selenium import webdriver
-            from selenium.webdriver.common.action_chains import ActionChains
         except ImportError as error:
             raise RuntimeError("Selenium ausente. Execute INSTALAR.bat.") from error
         options = webdriver.ChromeOptions()
-        # Mesmas opcoes do robo original (sem sinais de automacao).
-        options.add_argument("--start-maximized")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("detach", True)
-        self.driver = webdriver.Chrome(options=options)
-        self.driver.set_page_load_timeout(60)
-        self.driver.set_script_timeout(30)
-        self.actions = ActionChains
-        self.stop_event = stop_event
-        self.last = None
+        for argument in ("--headless=new", "--disable-gpu", "--disable-extensions", "--no-first-run"):
+            options.add_argument(argument)
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(60)
+        driver.set_script_timeout(30)
+        return driver
 
     def open(self):
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        self.driver.get("https://cav.receita.fazenda.gov.br/autenticacao/login")
+        """Nao abre site: o Chrome em branco so executa o JS de processamento."""
+        self.driver.get("about:blank")
+        log("Chrome invisivel em branco, usado apenas para processar a imagem da tela.")
+
+    def reiniciar_chrome(self, motivo, parou=True):
+        """Fecha o Chrome invisivel e abre outro, sem o usuario precisar agir."""
+        log(("Chrome invisivel parou (%s); abrindo de novo." if parou else "Renovando o Chrome invisivel (%s).")
+            % motivo[:160])
+        self.close_driver()
         try:
-            button = WebDriverWait(self.driver, 30).until(EC.element_to_be_clickable(
-                ("xpath", "//input[@type='image' and (contains(@src,'gov-br') or @alt='Acesso Gov BR')]")))
-            button.click()
-        except Exception:
-            log("Aguardando a imagem de verificacao na pagina aberta.")
-
-    def frame(self):
-        self.driver.switch_to.default_content()
-        candidates = []
-        for element in self.driver.find_elements("css selector", "iframe"):
-            try:
-                size = element.size
-                if element.is_displayed() and size["height"] > size["width"] > 200:
-                    candidates.append((size["width"] * size["height"], element))
-            except Exception:
-                continue
-        return max(candidates, key=lambda item: item[0])[1] if candidates else None
-
-    # As imagens do desafio aparecem aos poucos: esperar menos que isso gera grade incompleta.
-    ESPERA_INICIAL = 3.0
-    ESPERA_APOS_RESPOSTA = 2.0
-
-    def capture(self, anterior=None, espera=None):
-        """Espera a imagem carregar e parar de mudar, e a captura."""
-        inicio = time.monotonic()
-        if espera is None:
-            espera = self.ESPERA_APOS_RESPOSTA if anterior else self.ESPERA_INICIAL
-        if self.stop_event.wait(espera):
-            return None
-        last = None
-        while not self.stop_event.is_set() and time.monotonic() - inicio < 120:
-            frame = self.frame()
-            png = None
-            if frame is not None:
-                try:
-                    png = frame.screenshot_as_png
-                except Exception:
-                    png = None
-            if png:
-                decorrido = time.monotonic() - inicio
-                nova = png != anterior or decorrido > 10
-                if nova and (png == last or decorrido > 6):
-                    self.last = png
-                    return png
-            last = png
-            self.stop_event.wait(0.5)
-        if not self.stop_event.is_set():
-            raise ValueError("A imagem nao apareceu em dois minutos. Digite p para tentar outra captura.")
-        return None
+            self.driver = self._abrir_chrome()
+            self.driver.get("about:blank")
+        except Exception as error:
+            log("Nao consegui abrir o Chrome invisivel de novo: %s" % primeira_linha(error)[:200])
+            return False
+        self.aberto_em = time.monotonic()
+        if parou:
+            log("Chrome invisivel aberto de novo; vigiando a tela.")
+        return True
 
     def gerar_pdf(self, png):
-        """Gera o PDF numerado no navegador do robo, sem abrir pagina."""
-        self.driver.switch_to.default_content()
-        try:
-            value = self.driver.execute_async_script(GERAR_PDF_JS, base64.b64encode(png).decode("ascii"))
-        except Exception as error:
-            raise ValueError("Falha ao gerar o PDF: " + (str(error).strip().splitlines() or ["erro"])[0]) from error
+        """Gera o PDF numerado no Chrome invisivel, sem abrir pagina. Se o Chrome tiver
+        caido bem nessa hora, reabre e tenta mais uma vez."""
+        fonte = base64.b64encode(png).decode("ascii")
+        for tentativa in range(2):
+            try:
+                value = self.driver.execute_async_script(GERAR_PDF_JS, fonte)
+                break
+            except Exception as error:
+                if tentativa == 0 and self.reiniciar_chrome(primeira_linha(error)):
+                    continue
+                raise ValueError("Falha ao gerar o PDF: " + primeira_linha(error)) from error
         if not isinstance(value, dict) or not value.get("ok"):
             raise ValueError((value or {}).get("message") or "Falha ao gerar o PDF.")
         if value.get("completada"):
             log("Linhas da grade montadas pelas posicoes fixas do 3x3.")
+        self.jpeg = value.get("jpeg", "")
         return base64.b64decode(value["pdf"])
-
-    def click(self, frame, point):
-        """Igual ao robo original: rola ate o centro, espera parar e clica a partir do centro do quadro."""
-        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", frame)
-        time.sleep(0.2)
-        width, height = frame.size["width"], frame.size["height"]
-        dx, dy = int(width * point[0] - width / 2), int(height * point[1] - height / 2)
-        self.actions(self.driver).move_to_element_with_offset(frame, dx, dy).click().perform()
-
-    def answer(self, text):
-        """Clica nas posicoes e confirma. Devolve a captura anterior para detectar a troca."""
-        values = parse_numbers(text)
-        if text != "v" and not values:
-            raise ValueError("Use numeros de 1 a 9, p, v ou s.")
-        frame = self.frame()
-        if frame is None:
-            raise ValueError("A imagem nao esta na tela. Digite p para tentar outra captura.")
-        for number in values:
-            if self.stop_event.is_set():
-                return self.last
-            self.click(frame, self.POSITIONS[number])
-            self.stop_event.wait(0.3)
-        if not self.stop_event.wait(0.5):
-            self.click(frame, self.BUTTON)
-        return self.last
 
     def close_driver(self):
         try:
-            self.driver.service.stop()
+            self.driver.quit()
         except Exception:
             pass
 
-
-def chrome_path():
-    try:
-        import winreg
-    except ImportError:
-        winreg = None
-    if winreg is not None:
-        key = r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
-        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+    def capture(self, anterior=None, espera=None):
+        """Espera a grade 3x3 aparecer na tela e devolve o recorte do desafio."""
+        # Uma captura que falhe ou seja interrompida invalida as coordenadas anteriores.
+        self.centros, self.botao = {}, None
+        # Depois de responder, da tempo ao desafio de trocar antes da primeira print.
+        if espera is None:
+            espera = self.ESPERA_APOS_RESPOSTA if anterior else 0.0
+        if espera and self.stop_event.wait(espera):
+            return None
+        inicio = time.monotonic()
+        ultimo = candidato = repetido = mesmo_desde = None
+        falhas_js, reinicios, tela_falhou, mudancas = 0, 0, False, 0
+        while not self.stop_event.is_set() and (
+                TELA_TIMEOUT <= 0 or time.monotonic() - inicio < TELA_TIMEOUT):
+            pausa = INTERVALO_TELA
             try:
-                with winreg.OpenKey(root, key) as handle:
-                    candidate = Path(winreg.QueryValueEx(handle, "")[0])
-                if candidate.is_file():
-                    return str(candidate)
-            except OSError:
-                pass
-    for name in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
-        if os.environ.get(name):
-            candidate = Path(os.environ[name]) / "Google" / "Chrome" / "Application" / "chrome.exe"
-            if candidate.is_file():
-                return str(candidate)
-    return None
+                png, ox, oy = png_tela()
+            except (OSError, RuntimeError) as error:
+                # Tela bloqueada ou protetor de tela: avisa uma vez e continua vigiando.
+                if not tela_falhou:
+                    log("Falha ao capturar a tela (%s); tentando de novo." % error)
+                tela_falhou, candidato = True, None
+                self.stop_event.wait(INTERVALO_TELA)
+                continue
+            tela_falhou = False
+            digest = hashlib.sha256(png).digest()
+            if digest == ultimo:
+                # Tela identica a print anterior: o candidato ficou estavel.
+                if candidato is not None:
+                    return self.entregar(*candidato)
+                if repetido is not None and time.monotonic() - mesmo_desde >= self.REPETIR_MESMO:
+                    log("O desafio nao mudou em %ds; respondendo de novo." % self.REPETIR_MESMO)
+                    return self.entregar(*repetido)
+            else:
+                # Sem desafio em andamento e Chrome aberto ha muito tempo: renova antes que caia.
+                if self.aberto_em is None:
+                    self.aberto_em = time.monotonic()
+                if (candidato is None and repetido is None and
+                        time.monotonic() - self.aberto_em >= self.RENOVAR_CHROME):
+                    self.reiniciar_chrome("aberto ha %dh" % (self.RENOVAR_CHROME // 3600), parou=False)
+                try:
+                    value = self.driver.execute_async_script(
+                        LOCALIZAR_JS, base64.b64encode(png).decode("ascii"))
+                    falhas_js = reinicios = 0
+                except Exception as error:
+                    # Chrome invisivel parado: reabre sozinho; nunca vigiar em silencio para sempre.
+                    falhas_js += 1
+                    motivo = primeira_linha(error)
+                    logger.debug("Falha ao localizar a grade na tela: %s", error)
+                    if falhas_js >= self.FALHAS_PARA_REABRIR:
+                        if reinicios >= self.MAX_REINICIOS:
+                            raise ValueError("O Chrome invisivel parou %d vezes seguidas (%s). Feche e abra o "
+                                             "programa." % (reinicios, motivo[:160])) from error
+                        reinicios += 1
+                        self.reiniciar_chrome(motivo)
+                        falhas_js = 0
+                    value = None
+                # So marca a print como processada se o JS respondeu; uma falha
+                # temporaria deve permitir tentar de novo na proxima rodada.
+                if isinstance(value, dict):
+                    ultimo = digest
+                if isinstance(value, dict) and not value.get("ok"):
+                    self.avisar(str(value.get("message") or "grade nao encontrada"))
+                    repetido = mesmo_desde = None
+                novo = None
+                if isinstance(value, dict) and value.get("ok") and value.get("png"):
+                    try:
+                        recorte = base64.b64decode(value["png"])
+                        centros = {int(n): (int(x) + ox, int(y) + oy)
+                                   for n, (x, y) in value["cells"].items()}
+                        botao = (int(value["button"][0]) + ox, int(value["button"][1]) + oy)
+                        g = value.get("grade")
+                        grade = (float(g[0]) + ox, float(g[1]) + ox, float(g[2]) + oy, float(g[3])) if g else None
+                    except (KeyError, TypeError, ValueError, IndexError) as error:
+                        logger.debug("Resposta invalida ao localizar a grade: %s", error)
+                    else:
+                        lido = (recorte, centros, botao, bool(value.get("botaoAchado")), grade)
+                        if recorte != anterior:
+                            novo, repetido, mesmo_desde = lido, None, None
+                        else:
+                            # O desafio ja respondido continua na tela: espera trocar, mas nao para sempre.
+                            if repetido is None:
+                                mesmo_desde = time.monotonic()
+                                log("O mesmo desafio continua na tela; se nao mudar em %ds, respondo de novo."
+                                    % self.REPETIR_MESMO)
+                            repetido = lido
+                            if time.monotonic() - mesmo_desde >= self.REPETIR_MESMO:
+                                log("O desafio nao mudou em %ds; respondendo de novo." % self.REPETIR_MESMO)
+                                return self.entregar(*lido)
+                if novo is not None and novo == candidato:
+                    return self.entregar(*novo)
+                if novo is not None and candidato is not None and novo[1] == candidato[1]:
+                    # Mesmas 9 posicoes, so algum detalhe mudando: nao esperar para sempre.
+                    mudancas += 1
+                    if mudancas >= self.MAX_MUDANCAS:
+                        log("A grade esta parada, mas algum detalhe muda a cada print; respondendo assim mesmo.")
+                        return self.entregar(*novo)
+                else:
+                    mudancas = 0
+                candidato = novo
+                if candidato is not None:
+                    pausa = self.CONFIRMAR_TELA
+            self.stop_event.wait(pausa)
+        if not self.stop_event.is_set() and TELA_TIMEOUT > 0:
+            raise ValueError("A imagem nao apareceu na tela em %s segundos. Digite p para tentar outra captura."
+                             % int(TELA_TIMEOUT))
+        return None
+
+    AVISO_TELA = 20.0
+
+    def avisar(self, motivo):
+        """Diz no terminal por que a grade nao foi aceita, no maximo a cada 20s e sem repetir."""
+        agora = time.monotonic()
+        anterior, quando = getattr(self, "aviso_tela", ("", None))
+        if motivo != anterior and (quando is None or agora - quando >= self.AVISO_TELA):
+            self.aviso_tela = (motivo, agora)
+            log("Vigiando a tela: " + motivo)
+
+    def entregar(self, recorte, centros, botao, achado=False, grade=None):
+        log("Botao de confirmar: %s." % ("achado na tela" if achado else "estimado pela proporcao do desafio"))
+        self.centros, self.botao, self.last, self.grade = centros, botao, recorte, grade
+        return recorte
+
+    def botao_atual(self):
+        """Procura o botao de novo depois de marcar as imagens: o texto e a largura dele
+        mudam (Pular -> Verificar/Proximo) e o centro muda junto. Sem achar, usa o da captura."""
+        grade, driver = getattr(self, "grade", None), getattr(self, "driver", None)
+        if not grade or driver is None:
+            return self.botao
+        try:
+            png, ox, oy = png_tela()
+            value = driver.execute_async_script(BOTAO_JS, base64.b64encode(png).decode("ascii"),
+                                                [grade[0] - ox, grade[1] - ox, grade[2] - oy, grade[3]])
+            if isinstance(value, dict) and value.get("ok"):
+                botao = (int(value["button"][0]) + ox, int(value["button"][1]) + oy)
+                if botao != self.botao:
+                    log("Botao de confirmar: reposicionado depois de marcar as imagens.")
+                return botao
+        except Exception as error:
+            logger.debug("Falha ao procurar o botao de novo: %s", error)
+        return self.botao
+
+    def answer(self, text):
+        """Clica nos numeros e confirma com pausas humanas, sem tocar o navegador."""
+        values = parse_numbers(text)
+        if text != "v" and not values:
+            raise ValueError("Use numeros de 1 a 9, p, v ou s.")
+        if not self.centros or self.botao is None:
+            raise ValueError("A imagem nao esta na tela. Digite p para tentar outra captura.")
+        if any(number not in self.centros for number in values):
+            raise ValueError("Faltam coordenadas para a resposta. Nenhum clique executado.")
+        for number in values:
+            if self.stop_event.is_set():
+                return self.last
+            clique_humano(*self.centros[number], self.stop_event)
+            if self.stop_event.wait(random.uniform(0.15, 0.35)):
+                return self.last
+        if self.stop_event.wait(0.5):
+            return self.last
+        botao = self.botao_atual()
+        if not self.stop_event.is_set():
+            clique_humano(*botao, self.stop_event)
+        return self.last
 
 
-def acordar_extensao(segundos=8):
-    """Se a extensao nao falar com o programa, abre o Chrome do usuario (sem pagina local)."""
-    if threading.current_thread() is threading.main_thread():
-        threading.Thread(target=acordar_extensao, args=(segundos,), daemon=True).start()
-        return
-    time.sleep(segundos)
-    if ENGINE.last_contact:
-        return
-    log("Extensao ainda nao conectou; abrindo o Chrome com o perfil %s." % PROFILE_DIRECTORY)
-    executable = chrome_path()
-    try:
-        if executable and os.name == "nt":
-            os.startfile(executable, "open", '--profile-directory="%s"' % PROFILE_DIRECTORY)
-        else:
-            webbrowser.open("about:blank")
-    except (OSError, TypeError):
-        log("Abra o Chrome com a extensao PDF -> ChatGPT Web ativa.")
+def chave_openai():
+    """Chave da variavel OPENAI_API_KEY ou do arquivo chave_openai.txt (nunca exibida)."""
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key and CHAVE_PATH.is_file():
+        key = CHAVE_PATH.read_text(encoding="utf-8").strip()
+    return key if re.fullmatch(r"sk-[A-Za-z0-9_\-]{20,}", key) else ""
+
+
+class ClienteOpenAI:
+    """API de respostas da OpenAI, somente com a biblioteca padrao."""
+
+    def __init__(self, key, modelo):
+        self.key = key
+        self.modelo = modelo
+
+    def responder(self, jpeg_b64):
+        if not jpeg_b64:
+            raise ValueError("Imagem da pagina ausente.")
+        body = json.dumps({"model": self.modelo, "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": PROMPT_API},
+            {"type": "input_image", "image_url": "data:image/jpeg;base64," + jpeg_b64, "detail": "high"}]}]}).encode("utf-8")
+        data = None
+        for tentativa in range(3):
+            request = urllib.request.Request(OPENAI_URL, data=body, method="POST", headers={
+                "Authorization": "Bearer " + self.key, "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as error:
+                if error.code in (429, 500, 502, 503, 504) and tentativa < 2:
+                    time.sleep(2 * (tentativa + 1))
+                    continue
+                try:
+                    detalhe = json.loads(error.read().decode("utf-8")).get("error", {}).get("message", "")
+                except (ValueError, OSError, AttributeError):
+                    detalhe = ""
+                raise ValueError("API da OpenAI recusou (%s): %s" % (error.code, (detalhe or str(error.reason))[:200])) from None
+            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                if tentativa < 2:
+                    time.sleep(2)
+                    continue
+                raise ValueError("Sem conexao com a API da OpenAI: %s" % getattr(error, "reason", error)) from None
+        text = "".join(part.get("text", "") for item in (data or {}).get("output", []) if item.get("type") == "message"
+                       for part in item.get("content", []) if part.get("type") == "output_text").strip()
+        if not text:
+            raise ValueError("A API da OpenAI respondeu sem texto.")
+        uso = (data or {}).get("usage") or {}
+        if uso:
+            log("OpenAI: %s tokens de entrada + %s de saida." % (uso.get("input_tokens", "?"), uso.get("output_tokens", "?")))
+        return text
 
 
 class InstanceLock:
+    """Impede abrir o programa duas vezes (dois robos clicando na mesma tela)."""
+
     def __enter__(self):
-        directory = APP_DIR / "tmp"
-        safe_directory(directory)
-        self.stream = (directory / "servidor.lock").open("a+b")
+        safe_directory(LOCK_PATH.parent)
+        self.stream = LOCK_PATH.open("a+b")
         self.stream.seek(0, 2)
         if self.stream.tell() == 0:
             self.stream.write(b"0")
@@ -1918,52 +1732,40 @@ class InstanceLock:
         self.stream.close()
 
 
-def bind_server(start_port):
-    error = None
-    for port in range(start_port, start_port + 20):
-        try:
-            return LocalServer(("127.0.0.1", port), Handler)
-        except OSError as exc:
-            error = exc
-    raise error
-
-
 def main(argv=None):
-    global SECRET, ENGINE, ROBOT
-    parser = argparse.ArgumentParser(description="Captura -> PDF -> ChatGPT -> robo, tudo no terminal.")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--sem-robo", action="store_true", help="somente o servidor da extensao")
-    parser.add_argument("--preparar-extensao", action="store_true", help="gera os arquivos da extensao e encerra")
-    # Atalhos antigos continuam funcionando.
-    parser.add_argument("--abrir", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--robo", action="store_true", help=argparse.SUPPRESS)
+    global ENGINE, ROBOT, API
+    parser = argparse.ArgumentParser(description="Print da tela -> PDF -> API da OpenAI -> cliques, tudo no terminal.")
+    parser.add_argument("--modelo", default=os.environ.get("OPENAI_MODEL", MODELO_PADRAO), help="modelo da API da OpenAI")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
-    if not 1 <= args.port <= 65515:
-        parser.error("A porta deve ficar entre 1 e 65515.")
+    # Avisos internos de nova tentativa do Selenium ("Retrying ...") so poluiam o terminal;
+    # o programa ja avisa e reabre o Chrome invisivel quando ele para.
+    logging.getLogger("urllib3").setLevel(logging.ERROR)
+    key = chave_openai()
+    if not key:
+        print("Coloque a chave da OpenAI (sk-...) em chave_openai.txt ou na variavel OPENAI_API_KEY.",
+              file=sys.stderr)
+        return 1
     try:
         with InstanceLock():
-            SECRET = token()
-            materializar(APP_DIR)
-            if args.preparar_extensao:
-                print("Extensao preparada em pdf/extensao_deepseek.")
-                return 0
+            API = ClienteOpenAI(key, args.modelo)
             ENGINE = Engine()
             ROBOT = Robo()
-            httpd = bind_server(args.port)
             try:
-                log("Programa pronto (porta %s). Comandos: numeros (1,5,9) | p nova captura | v verificar | s parar | Ctrl+C sair."
-                    % httpd.server_port)
-                acordar_extensao()
-                if not args.sem_robo:
-                    ROBOT.start()
+                log("Programa pronto (versao %s). Comandos: numeros (1,5,9) | p nova captura | v verificar | "
+                    "s ou Ctrl+C sair." % VERSAO)
+                log("Print da tela a cada %gs; respostas pela API da OpenAI (modelo %s)." % (INTERVALO_TELA, args.modelo))
                 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-                httpd.serve_forever(poll_interval=0.25)
+                ROBOT.start()
+                # O robo roda em outra thread; `s` ou Ctrl+C encerram o programa.
+                while ROBOT.thread.is_alive():
+                    ROBOT.thread.join(0.5)
             except KeyboardInterrupt:
                 pass
             finally:
                 ROBOT.stop()
-                httpd.server_close()
+                if ROBOT.thread is not None:
+                    ROBOT.thread.join(5)
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 1
